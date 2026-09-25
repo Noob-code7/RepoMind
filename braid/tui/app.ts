@@ -141,6 +141,11 @@ export class TuiApp {
   private cursor = 0;
   private scrollOffset = 0;
   private menuIndex = 0;
+  /** Viewport offset into the slash menu when it overflows the 8-row box. */
+  private menuScroll = 0;
+  /** 1-based frame rows of the visible slash-menu box (0,0 when closed). */
+  private menuRowStart = 0;
+  private menuRowEnd = 0;
   private menuDismissed = false;
   private modeMenuOpen = false;
   private modeMenuIndex = 0;
@@ -346,7 +351,58 @@ export class TuiApp {
     const q = firstLine.slice(1).split(/\s+/)[0] ?? '';
     const list = filterCommands(q);
     if (this.menuIndex >= list.length) this.menuIndex = 0;
+    if (this.menuScroll >= list.length) this.menuScroll = 0;
+    this.ensureMenuVisible(list.length);
     return list;
+  }
+
+  /** Visible slash-menu window (max 8 rows). */
+  private static readonly MENU_PAGE = 8;
+
+  /** Keep menuIndex inside the visible viewport. */
+  private ensureMenuVisible(total: number): void {
+    if (total <= 0) {
+      this.menuScroll = 0;
+      return;
+    }
+    const page = TuiApp.MENU_PAGE;
+    if (this.menuScroll > this.menuIndex) this.menuScroll = this.menuIndex;
+    if (this.menuIndex >= this.menuScroll + page) this.menuScroll = this.menuIndex - page + 1;
+    const maxScroll = Math.max(0, total - page);
+    if (this.menuScroll > maxScroll) this.menuScroll = maxScroll;
+    if (this.menuScroll < 0) this.menuScroll = 0;
+  }
+
+  /** Move the slash-menu selection; viewport follows. No-op when closed. */
+  private scrollMenu(delta: number): boolean {
+    const menu = this.slashMenu();
+    if (!menu || menu.length === 0) return false;
+    const len = menu.length;
+    this.menuIndex = ((this.menuIndex + delta) % len + len) % len;
+    this.ensureMenuVisible(len);
+    this.render();
+    return true;
+  }
+
+  /** True when a mouse row is inside the visible slash-menu box. */
+  private isWheelInMenu(row: number): boolean {
+    return (
+      this.menuRowStart > 0 &&
+      row >= this.menuRowStart &&
+      row <= this.menuRowEnd
+    );
+  }
+
+  /**
+   * Route one wheel tick: returns true when the pointer was inside the
+   * / list box (list scrolled, conversation untouched).
+   * Wheel up (delta -1) moves to the previous command, wheel down (+1)
+   * to the next; the 8-row viewport follows the selection.
+   */
+  private handleMenuWheel(row: number, delta: -1 | 1): boolean {
+    if (!this.isWheelInMenu(row)) return false;
+    if (!this.scrollMenu(delta)) return false;
+    return true;
   }
 
   private render(): void {
@@ -544,15 +600,24 @@ export class TuiApp {
     }
 
     if (menu && menu.length > 0) {
+      this.ensureMenuVisible(menu.length);
+      const page = TuiApp.MENU_PAGE;
+      const visible = menu.slice(this.menuScroll, this.menuScroll + page);
       s += '\n';
-      menu.slice(0, 8).forEach((c, i) => {
+      this.menuRowStart = s.split('\n').length;
+      visible.forEach((c, i) => {
+        const absIdx = this.menuScroll + i;
         const menuRow = s.split('\n').length;
         this.registerClick(menuRow, 1, cols, () => {
-          this.completeMenuIndex(i);
+          this.completeMenuIndex(absIdx);
         });
-        const cur = i === (this.menuIndex % Math.min(menu.length, 8)) ? `${C.accent}›${C.reset}` : ' ';
+        const cur = absIdx === this.menuIndex ? `${C.accent}›${C.reset}` : ' ';
         s += chrome(`${cur} ${C.text}/${c.name}${C.reset} ${C.faint}— ${c.description}${C.reset}`) + '\n';
       });
+      this.menuRowEnd = s.split('\n').length - 1;
+    } else {
+      this.menuRowStart = 0;
+      this.menuRowEnd = 0;
     }
 
     if (this.modelMenuOpen) {
@@ -609,66 +674,39 @@ export class TuiApp {
     s += C.reset; // leave terminal state clean between frames
     process.stdout.write(s);
 
-    // Reposition cursor inside the bordered input.
-    // Rows after cursor visual row: remaining input rows + bottom border + status + hint.
-    const remainingInput = visual.length - 1 - Math.max(0, cursorVisRow);
-    const linesAfter = remainingInput + 1 + 1 + hintHeight;
-    const cursorColInVisual = this.visualCursorCol(before, innerWidth);
-    const targetCol = padLeft + 3 + cursorColInVisual;
-    if (isEmpty) {
-      // Placeholder — park at input start.
-      if (linesAfter > 0) process.stdout.write(`\x1b[${linesAfter}A`);
-      process.stdout.write(`\x1b[${padLeft + 3}G`);
-    } else {
-      if (linesAfter > 0) process.stdout.write(`\x1b[${linesAfter}A`);
-      process.stdout.write(`\x1b[${targetCol}G`);
-    }
+    // Place the terminal cursor exactly on the editable cell: absolute
+    // frame coordinates derived from the layout (never relative moves from
+    // wherever rendering happened to end). 1-based: text starts after the
+    // margin, left border and one padding space.
+    const boxTopRow = rows - (inputBoxHeight + 1 + hintHeight) + 1;
+    const cursorRow = boxTopRow + 1 + rowInWin;
+    const cursorCol = L.margin + 3 + cursorAbs.visCol;
+    process.stdout.write(`\x1b[${cursorRow};${cursorCol}H`);
     process.stdout.write('\x1b[?25h');
   }
 
-  /** Split logical buffer lines into visual rows of innerWidth. Pure + testable. */
-  private wrapBufferVisual(lines: string[], innerWidth: number): string[] {
-    const w = Math.max(10, innerWidth);
-    const out: string[] = [];
-    for (const line of lines) {
-      if (line.length === 0) {
-        out.push('');
-        continue;
-      }
-      let rest = line;
-      while (rest.length > w) {
-        out.push(rest.slice(0, w));
-        rest = rest.slice(w);
-      }
-      out.push(rest);
-    }
-    return out.length > 0 ? out : [''];
+  /**
+   * Clamp a logical cursor offset into the buffer. All key handling should
+   * route through this so the cursor can never escape the editable text.
+   */
+  private setCursor(n: number): void {
+    const v = Math.floor(n);
+    this.cursor = Number.isFinite(v)
+      ? Math.max(0, Math.min(v, this.buffer.length))
+      : this.buffer.length;
   }
 
-  /** Visual row index of the cursor within the wrapped buffer. */
-  private visualCursorRow(beforeCursor: string, innerWidth: number): number {
-    const w = Math.max(10, innerWidth);
-    const lines = beforeCursor.split('\n');
-    let row = 0;
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i]!;
-      if (i < lines.length - 1) {
-        row += Math.max(1, Math.ceil(line.length / w) || 1);
-        if (line.length === 0) row += 0; // empty line already counted as 1
-      } else {
-        // Last (cursor) line: completed wrapped rows before cursor col.
-        const col = line.length;
-        row += Math.floor(col / w);
-      }
-    }
-    return row;
+  /** Move one character left, stepping over whole code points (emoji-safe). */
+  private stepLeft(): void {
+    const before = [...this.buffer.slice(0, this.cursor)];
+    before.pop();
+    this.cursor = before.join('').length;
   }
 
-  /** Visual column of the cursor within its wrapped row. */
-  private visualCursorCol(beforeCursor: string, innerWidth: number): number {
-    const w = Math.max(10, innerWidth);
-    const col = (beforeCursor.split('\n').pop() ?? '').length;
-    return col % w;
+  /** Move one character right, stepping over whole code points (emoji-safe). */
+  private stepRight(): void {
+    const ch = [...this.buffer.slice(this.cursor)][0] ?? '';
+    this.cursor += ch.length;
   }
 
   /** Activate a home suggestion WITHOUT overwriting non-empty input. */
@@ -1327,13 +1365,19 @@ export class TuiApp {
             // Left mouse click
             this.handleMouseClick(x, y);
           } else if (btn === 64) {
-            // Mouse wheel up: scroll page UP only (view older content)
-            this.scrollOffset += 3;
-            this.render();
+            // Wheel up: inside the / list box scrolls the list,
+            // otherwise scrolls the conversation (never both).
+            if (!this.handleMenuWheel(y, -1)) {
+              this.scrollOffset += 3;
+              this.render();
+            }
           } else if (btn === 65) {
-            // Mouse wheel down: scroll page DOWN only (view newer content)
-            this.scrollOffset = Math.max(0, this.scrollOffset - 3);
-            this.render();
+            // Wheel down: inside the / list box scrolls the list,
+            // otherwise scrolls the conversation (never both).
+            if (!this.handleMenuWheel(y, 1)) {
+              this.scrollOffset = Math.max(0, this.scrollOffset - 3);
+              this.render();
+            }
           }
         }
       }
@@ -1451,8 +1495,8 @@ export class TuiApp {
     const menuOpen = menu && menu.length > 0;
     if (menuOpen) {
       if (name === 'escape') { this.menuDismissed = true; this.render(); return; }
-      if (name === 'up') { this.menuIndex = (this.menuIndex + menu.length - 1) % menu.length; this.render(); return; }
-      if (name === 'down') { this.menuIndex = (this.menuIndex + 1) % menu.length; this.render(); return; }
+      if (name === 'up') { this.menuIndex = (this.menuIndex + menu.length - 1) % menu.length; this.ensureMenuVisible(menu.length); this.render(); return; }
+      if (name === 'down') { this.menuIndex = (this.menuIndex + 1) % menu.length; this.ensureMenuVisible(menu.length); this.render(); return; }
     }
     if (key.ctrl && name === 't') {
       this.modeMenuOpen = true;
@@ -1489,6 +1533,7 @@ export class TuiApp {
       this.mode = cycleMode(this.mode, dir as 1 | -1);
       this.menuDismissed = false;
       this.menuIndex = 0;
+      this.menuScroll = 0;
       this.persist();
       this.render();
       return;
@@ -1514,22 +1559,27 @@ export class TuiApp {
         return;
       case 'backspace':
         if (this.cursor > 0) {
-          this.buffer = this.buffer.slice(0, this.cursor - 1) + this.buffer.slice(this.cursor);
-          this.cursor--;
+          const pre = [...this.buffer.slice(0, this.cursor)];
+          pre.pop(); // whole code point (emoji-safe), not one UTF-16 unit
+          const head = pre.join('');
+          this.buffer = head + this.buffer.slice(this.cursor);
+          this.setCursor(head.length);
           this.menuDismissed = false;
           this.render();
         }
         return;
       case 'delete':
         if (this.cursor < this.buffer.length) {
-          this.buffer = this.buffer.slice(0, this.cursor) + this.buffer.slice(this.cursor + 1);
+          const ch = [...this.buffer.slice(this.cursor)][0] ?? '';
+          this.buffer = this.buffer.slice(0, this.cursor) + this.buffer.slice(this.cursor + ch.length);
+          this.setCursor(this.cursor);
           this.render();
         }
         return;
-      case 'left': if (this.cursor > 0) { this.cursor--; this.render(); } return;
-      case 'right': if (this.cursor < this.buffer.length) { this.cursor++; this.render(); } return;
+      case 'left': if (this.cursor > 0) { this.stepLeft(); this.render(); } return;
+      case 'right': if (this.cursor < this.buffer.length) { this.stepRight(); this.render(); } return;
       case 'up':
-        if (menuOpen) { this.menuIndex = (this.menuIndex + menu!.length - 1) % menu!.length; this.render(); return; }
+        if (menuOpen) { this.menuIndex = (this.menuIndex + menu!.length - 1) % menu!.length; this.ensureMenuVisible(menu!.length); this.render(); return; }
         if (this.suggestionsActive()) {
           this.suggestionIndex = (this.suggestionIndex + HOME_SUGGESTIONS.length - 1) % HOME_SUGGESTIONS.length;
           this.render();
@@ -1543,7 +1593,7 @@ export class TuiApp {
         }
         return;
       case 'down':
-        if (menuOpen) { this.menuIndex = (this.menuIndex + 1) % menu!.length; this.render(); return; }
+        if (menuOpen) { this.menuIndex = (this.menuIndex + 1) % menu!.length; this.ensureMenuVisible(menu!.length); this.render(); return; }
         if (this.suggestionsActive()) {
           this.suggestionIndex = (this.suggestionIndex + 1) % HOME_SUGGESTIONS.length;
           this.render();
@@ -1587,7 +1637,7 @@ export class TuiApp {
         this.buffer = this.buffer.slice(0, this.cursor) + insert + this.buffer.slice(this.cursor);
         this.cursor += insert.length;
         this.menuDismissed = false;
-        if (!this.buffer.startsWith('/')) this.menuIndex = 0;
+        if (!this.buffer.startsWith('/')) { this.menuIndex = 0; this.menuScroll = 0; }
         // Paste of multiline text just works (buffer holds \n).
         this.render();
       }
@@ -1601,17 +1651,19 @@ export class TuiApp {
     this.cursor = this.buffer.length;
     this.menuDismissed = true;
     this.menuIndex = 0;
+    this.menuScroll = 0;
     this.render();
   }
 
   private completeMenuIndex(idx: number): void {
     const menu = this.slashMenu();
     if (!menu || menu.length === 0) return;
-    const pick = menu[idx % menu.length]!;
+    const pick = menu[((idx % menu.length) + menu.length) % menu.length]!;
     this.buffer = `/${pick.name} `;
     this.cursor = this.buffer.length;
     this.menuDismissed = true;
     this.menuIndex = 0;
+    this.menuScroll = 0;
     this.render();
   }
 
@@ -1658,6 +1710,7 @@ export class TuiApp {
         this.buffer = '';
         this.cursor = 0;
         this.menuIndex = 0;
+        this.menuScroll = 0;
         this.menuDismissed = false;
         this.render();
         return;
@@ -1666,6 +1719,7 @@ export class TuiApp {
     this.buffer = '';
     this.cursor = 0;
     this.menuIndex = 0;
+    this.menuScroll = 0;
     this.menuDismissed = false;
     this.histIdx = this.history.length;
     if (line.trim()) {
@@ -1740,6 +1794,9 @@ export class TuiApp {
       if (process.stdin.isTTY) process.stdin.setRawMode(false);
     } catch { /* ignore */ }
     process.stdin.pause();
+    if (process.stdout.isTTY) {
+      process.stdout.write('\x1b[?1000l\x1b[?1002l\x1b[?1006l');
+    }
     if (this.useAltScreen && process.stdout.isTTY) {
       process.stdout.write('\x1b[?1049l'); // back to the main screen
     }

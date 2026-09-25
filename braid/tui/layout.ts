@@ -178,6 +178,12 @@ export function computeCursor(
   }
   const lastLine = lines[lines.length - 1] ?? '';
   const lastRows = wrapVisual([lastLine], w);
-  const visCol = displayWidth(lastRows[lastRows.length - 1] ?? '');
+  let visCol = displayWidth(lastRows[lastRows.length - 1] ?? '');
+  // A cursor sitting exactly on a wrap boundary belongs at the start of
+  // the next row (that is where terminals display it).
+  if (visCol >= w) {
+    visRow += 1;
+    visCol = 0;
+  }
   return { visRow, visCol };
 }
