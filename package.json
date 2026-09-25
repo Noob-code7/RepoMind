@@ -9,7 +9,11 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "demo": "tsx orchestrator/state_machine.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "braid": "tsx cli.ts",
+    "plan": "tsx cli.ts plan",
+    "review": "tsx cli.ts review",
+    "brand": "tsx cli.ts brand"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.1",

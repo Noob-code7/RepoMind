@@ -4,10 +4,10 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Braid — Autonomous Multi-Model SDLC Orchestrator</title>
-  <meta name="description" content="Autonomous, multi-model SDLC agent with chunked two-pass generation, deterministic manifest enforcement, and human approval gates.">
+  <meta name="description" content="Autonomous multi-model SDLC orchestrator featuring repository context mapping, strict DAG planning, and independent review.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwind.config = {
@@ -15,15 +15,19 @@
       theme: {
         extend: {
           fontFamily: {
-            sans: ['Inter', 'sans-serif'],
+            sans: ['Inter', '-apple-system', 'BlinkMacSystemFont', 'sans-serif'],
             mono: ['JetBrains Mono', 'monospace'],
           },
           colors: {
-            brand: {
-              50: '#f0f9ff',
-              500: '#06b6d4',
-              600: '#0891b2',
-              700: '#0e7490',
+            braid: {
+              bg: '#0d0d0e',
+              surface: '#151517',
+              border: '#242428',
+              ivory: '#f5f4ef',
+              peach: '#f09d79',
+              muted: '#7a797b',
+              sage: '#98c379',
+              crimson: '#e06c75',
             }
           }
         }
@@ -33,158 +37,364 @@
   <style>
     body {
       font-family: 'Inter', sans-serif;
-      background-color: #030712;
-      color: #f3f4f6;
+      background-color: #0d0d0e;
+      color: #f5f4ef;
     }
-    .glass-card {
-      background: rgba(17, 24, 39, 0.7);
-      backdrop-filter: blur(12px);
-      border: 1px solid rgba(255, 255, 255, 0.08);
+    .braid-card {
+      background: #151517;
+      border: 1px solid #242428;
     }
-    .glow-cyan {
-      box-shadow: 0 0 25px -5px rgba(6, 182, 212, 0.3);
+    .braid-card-hover:hover {
+      border-color: #38383e;
     }
   </style>
 </head>
-<body class="min-h-screen flex flex-col antialiased selection:bg-cyan-500 selection:text-black">
-  <div id="root">
-    <!-- Standalone Dynamic UI Container -->
-    <header class="border-b border-slate-800/80 bg-slate-900/60 backdrop-blur-md sticky top-0 z-50 px-6 py-4 flex items-center justify-between">
-      <div class="flex items-center gap-3">
-        <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-cyan-500 via-blue-600 to-indigo-600 flex items-center justify-center font-black text-white text-xl shadow-lg glow-cyan">
-          B
-        </div>
-        <div>
-          <h1 class="text-lg font-bold text-white tracking-tight flex items-center gap-2">
-            Braid <span class="text-xs px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-400 font-mono">v0.1.0</span>
-          </h1>
-          <p class="text-xs text-slate-400">
-            Autonomous Multi-Model SDLC Orchestrator &bull; Governed Lifecycle Agent
-          </p>
-        </div>
+<body class="min-h-screen flex flex-col antialiased selection:bg-[#f09d79]/20 selection:text-[#f5f4ef]">
+
+  <!-- Header -->
+  <header class="border-b border-[#242428] bg-[#0d0d0e]/90 backdrop-blur-md sticky top-0 z-50 px-6 py-3.5 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <!-- Live Flowing DNA Helix SVG Mark -->
+      <div class="w-10 h-10 flex items-center justify-center">
+        <svg id="headerMarkSvg" viewBox="0 0 100 100" class="w-9 h-9" aria-label="Braid Official Mark">
+          <defs>
+            <linearGradient id="headerGradA" x1="0%" y1="0%" x2="0%" y2="100%">
+              <stop offset="0%" stop-color="#f5f4ef" stop-opacity="0.4" />
+              <stop offset="25%" stop-color="#f5f4ef" stop-opacity="1.0" />
+              <stop offset="75%" stop-color="#f5f4ef" stop-opacity="1.0" />
+              <stop offset="100%" stop-color="#f5f4ef" stop-opacity="0.4" />
+            </linearGradient>
+            <linearGradient id="headerGradB" x1="0%" y1="0%" x2="0%" y2="100%">
+              <stop offset="0%" stop-color="#f09d79" stop-opacity="0.35" />
+              <stop offset="25%" stop-color="#f09d79" stop-opacity="0.95" />
+              <stop offset="75%" stop-color="#f09d79" stop-opacity="0.95" />
+              <stop offset="100%" stop-color="#f09d79" stop-opacity="0.35" />
+            </linearGradient>
+          </defs>
+          <path id="headerStrandB" fill="none" stroke="url(#headerGradB)" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round" opacity="0.9" />
+          <path id="headerStrandA" fill="none" stroke="url(#headerGradA)" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round" opacity="1.0" />
+          <g id="headerCrossNodes"></g>
+        </svg>
       </div>
 
-      <div class="flex items-center gap-4 text-xs font-mono">
-        <div class="bg-slate-900/80 px-3 py-1.5 rounded-lg border border-slate-800">
-          <span class="text-slate-500 mr-2">AGILE CYCLE:</span>
-          <span id="headerCycle" class="text-cyan-400 font-bold">#1</span>
+      <div>
+        <div class="flex items-center gap-2">
+          <h1 class="text-base font-semibold text-[#f5f4ef] tracking-tight">Braid</h1>
+          <span class="text-[10px] px-1.5 py-0.5 rounded bg-[#1e1e22] text-[#f09d79] border border-[#2e2e34] font-mono">v0.1.0</span>
+          <span class="text-[10px] px-2 py-0.5 rounded-full bg-[#1c1c1f] text-[#7a797b] border border-[#242428] font-mono uppercase" id="badgeCurrentState">idle</span>
         </div>
-        <div class="bg-slate-900/80 px-3 py-1.5 rounded-lg border border-slate-800">
-          <span class="text-slate-500 mr-2">STAGE:</span>
-          <span id="headerState" class="text-emerald-400 font-bold uppercase">PLAN</span>
-        </div>
-      </div>
-    </header>
-
-    <!-- Pipeline Stepper Bar -->
-    <div class="bg-slate-900/40 border-b border-slate-800/80 px-6 py-3 overflow-x-auto">
-      <div class="flex items-center justify-between max-w-5xl mx-auto min-w-[700px]">
-        <div id="step-PLAN" class="flex items-center gap-2">
-          <div class="step-num w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold bg-cyan-500 text-slate-950 ring-4 ring-cyan-500/20 shadow-lg shadow-cyan-500/30">1</div>
-          <span class="text-xs font-bold text-cyan-400 tracking-wider">PLAN</span>
-          <span class="text-slate-700 mx-2">&rarr;</span>
-        </div>
-        <div id="step-REVIEW" class="flex items-center gap-2">
-          <div class="step-num w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold bg-slate-800 text-slate-500">2</div>
-          <span class="text-xs font-semibold text-slate-600 tracking-wider">REVIEW</span>
-          <span class="text-slate-700 mx-2">&rarr;</span>
-        </div>
-        <div id="step-GATE_REVIEW" class="flex items-center gap-2">
-          <div class="step-num w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold bg-slate-800 text-slate-500">3</div>
-          <span class="text-xs font-semibold text-slate-600 tracking-wider">GATE 1</span>
-          <span class="text-slate-700 mx-2">&rarr;</span>
-        </div>
-        <div id="step-EXECUTE" class="flex items-center gap-2">
-          <div class="step-num w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold bg-slate-800 text-slate-500">4</div>
-          <span class="text-xs font-semibold text-slate-600 tracking-wider">EXECUTE</span>
-          <span class="text-slate-700 mx-2">&rarr;</span>
-        </div>
-        <div id="step-DEBUG" class="flex items-center gap-2">
-          <div class="step-num w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold bg-slate-800 text-slate-500">5</div>
-          <span class="text-xs font-semibold text-slate-600 tracking-wider">DEBUG</span>
-          <span class="text-slate-700 mx-2">&rarr;</span>
-        </div>
-        <div id="step-REPORT" class="flex items-center gap-2">
-          <div class="step-num w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold bg-slate-800 text-slate-500">6</div>
-          <span class="text-xs font-semibold text-slate-600 tracking-wider">REPORT</span>
-          <span class="text-slate-700 mx-2">&rarr;</span>
-        </div>
-        <div id="step-GATE_REPORT" class="flex items-center gap-2">
-          <div class="step-num w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold bg-slate-800 text-slate-500">7</div>
-          <span class="text-xs font-semibold text-slate-600 tracking-wider">GATE 2</span>
-          <span class="text-slate-700 mx-2">&rarr;</span>
-        </div>
-        <div id="step-DONE" class="flex items-center gap-2">
-          <div class="step-num w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold bg-slate-800 text-slate-500">8</div>
-          <span class="text-xs font-semibold text-slate-600 tracking-wider">DONE</span>
-        </div>
+        <p class="text-xs text-[#7a797b] mt-0.5">
+          Two reasoning threads &bull; weave together &bull; one verified result
+        </p>
       </div>
     </div>
 
-    <!-- Main Grid -->
-    <main class="flex-1 max-w-6xl w-full mx-auto p-6 grid grid-cols-1 lg:grid-cols-3 gap-6">
-      <div id="mainStageArea" class="lg:col-span-2 space-y-6">
-        <!-- Stage views rendered here via client JS -->
+    <!-- Right Controls: Agile Cycle & Motion State Switcher -->
+    <div class="flex items-center gap-4 text-xs font-mono">
+      <div class="flex items-center bg-[#151517] rounded-lg border border-[#242428] p-1 gap-1">
+        <span class="text-[11px] text-[#7a797b] px-2">MOTION STATE:</span>
+        <button onclick="setMotionState('idle')" class="state-btn px-2 py-1 rounded text-[11px] font-medium transition" data-state="idle">idle</button>
+        <button onclick="setMotionState('planning')" class="state-btn px-2 py-1 rounded text-[11px] font-medium transition" data-state="planning">plan</button>
+        <button onclick="setMotionState('review')" class="state-btn px-2 py-1 rounded text-[11px] font-medium transition" data-state="review">review</button>
+        <button onclick="setMotionState('build')" class="state-btn px-2 py-1 rounded text-[11px] font-medium transition" data-state="build">build</button>
+        <button onclick="setMotionState('verify')" class="state-btn px-2 py-1 rounded text-[11px] font-medium transition" data-state="verify">verify</button>
+        <button onclick="setMotionState('success')" class="state-btn px-2 py-1 rounded text-[11px] font-medium transition" data-state="success">success</button>
+        <button onclick="setMotionState('error')" class="state-btn px-2 py-1 rounded text-[11px] font-medium transition" data-state="error">error</button>
+      </div>
+
+      <div class="bg-[#151517] px-3 py-1.5 rounded-lg border border-[#242428]">
+        <span class="text-[#7a797b] mr-2">CYCLE:</span>
+        <span id="headerCycle" class="text-[#f09d79] font-bold">#1</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Pipeline Stepper Bar -->
+  <div class="bg-[#111113] border-b border-[#242428] px-6 py-2.5 overflow-x-auto">
+    <div class="flex items-center justify-between max-w-5xl mx-auto min-w-[700px]">
+      <div id="step-PLAN" class="flex items-center gap-2">
+        <div class="step-num w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold bg-[#f5f4ef] text-[#0d0d0e]">1</div>
+        <span class="text-xs font-medium text-[#f5f4ef] tracking-wider">PLAN</span>
+        <span class="text-[#38383e] mx-2">&rarr;</span>
+      </div>
+      <div id="step-REVIEW" class="flex items-center gap-2">
+        <div class="step-num w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold bg-[#1e1e22] text-[#7a797b]">2</div>
+        <span class="text-xs font-medium text-[#7a797b] tracking-wider">REVIEW</span>
+        <span class="text-[#38383e] mx-2">&rarr;</span>
+      </div>
+      <div id="step-GATE_REVIEW" class="flex items-center gap-2">
+        <div class="step-num w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold bg-[#1e1e22] text-[#7a797b]">3</div>
+        <span class="text-xs font-medium text-[#7a797b] tracking-wider">GATE 1</span>
+        <span class="text-[#38383e] mx-2">&rarr;</span>
+      </div>
+      <div id="step-EXECUTE" class="flex items-center gap-2">
+        <div class="step-num w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold bg-[#1e1e22] text-[#7a797b]">4</div>
+        <span class="text-xs font-medium text-[#7a797b] tracking-wider">EXECUTE</span>
+        <span class="text-[#38383e] mx-2">&rarr;</span>
+      </div>
+      <div id="step-DEBUG" class="flex items-center gap-2">
+        <div class="step-num w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold bg-[#1e1e22] text-[#7a797b]">5</div>
+        <span class="text-xs font-medium text-[#7a797b] tracking-wider">DEBUG</span>
+        <span class="text-[#38383e] mx-2">&rarr;</span>
+      </div>
+      <div id="step-REPORT" class="flex items-center gap-2">
+        <div class="step-num w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold bg-[#1e1e22] text-[#7a797b]">6</div>
+        <span class="text-xs font-medium text-[#7a797b] tracking-wider">REPORT</span>
+        <span class="text-[#38383e] mx-2">&rarr;</span>
+      </div>
+      <div id="step-GATE_REPORT" class="flex items-center gap-2">
+        <div class="step-num w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold bg-[#1e1e22] text-[#7a797b]">7</div>
+        <span class="text-xs font-medium text-[#7a797b] tracking-wider">GATE 2</span>
+        <span class="text-[#38383e] mx-2">&rarr;</span>
+      </div>
+      <div id="step-DONE" class="flex items-center gap-2">
+        <div class="step-num w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold bg-[#1e1e22] text-[#7a797b]">8</div>
+        <span class="text-xs font-medium text-[#7a797b] tracking-wider">DONE</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main Content Layout -->
+  <main class="flex-1 max-w-6xl w-full mx-auto p-6 grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <!-- Left Stage Interactive Area -->
+    <div id="mainStageArea" class="lg:col-span-2 space-y-6">
+      <!-- Dynamic Stage Render -->
+    </div>
+
+    <!-- Right Column: DNA Showcase & Live Stream -->
+    <div class="space-y-4">
+      <!-- Brand & Motion Card -->
+      <div class="braid-card rounded-xl p-5 shadow-xl">
+        <div class="flex items-center justify-between pb-3 border-b border-[#242428]">
+          <h3 class="text-xs font-semibold uppercase tracking-wider text-[#f5f4ef] flex items-center gap-2">
+            DNA Helix Motion System
+          </h3>
+          <span class="text-[10px] text-[#f09d79] font-mono">60 FPS VECTOR</span>
+        </div>
+        
+        <div class="py-4 flex flex-col items-center justify-center">
+          <div class="w-24 h-24 flex items-center justify-center bg-[#0d0d0e] rounded-xl border border-[#242428] relative">
+            <svg id="previewMarkSvg" viewBox="0 0 100 100" class="w-16 h-16" aria-label="Braid Large Mark">
+              <defs>
+                <linearGradient id="previewGradA" x1="0%" y1="0%" x2="0%" y2="100%">
+                  <stop offset="0%" stop-color="#f5f4ef" stop-opacity="0.4" />
+                  <stop offset="25%" stop-color="#f5f4ef" stop-opacity="1.0" />
+                  <stop offset="75%" stop-color="#f5f4ef" stop-opacity="1.0" />
+                  <stop offset="100%" stop-color="#f5f4ef" stop-opacity="0.4" />
+                </linearGradient>
+                <linearGradient id="previewGradB" x1="0%" y1="0%" x2="0%" y2="100%">
+                  <stop offset="0%" stop-color="#f09d79" stop-opacity="0.35" />
+                  <stop offset="25%" stop-color="#f09d79" stop-opacity="0.95" />
+                  <stop offset="75%" stop-color="#f09d79" stop-opacity="0.95" />
+                  <stop offset="100%" stop-color="#f09d79" stop-opacity="0.35" />
+                </linearGradient>
+              </defs>
+              <path id="previewStrandB" fill="none" stroke="url(#previewGradB)" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round" opacity="0.9" />
+              <path id="previewStrandA" fill="none" stroke="url(#previewGradA)" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round" opacity="1.0" />
+              <g id="previewCrossNodes"></g>
+            </svg>
+          </div>
+          <div class="text-[11px] font-mono text-[#f09d79] mt-2 font-medium" id="previewStateLabel">STATE: IDLE</div>
+          <p class="text-[11px] text-[#7a797b] text-center mt-1 max-w-[240px] leading-relaxed">
+            Continuous wave deformation without spinner rotation. Two threads converging into one verified result.
+          </p>
+        </div>
+
+        <div class="grid grid-cols-2 gap-2 text-[10px] font-mono border-t border-[#242428] pt-3">
+          <div class="bg-[#0d0d0e] p-2 rounded border border-[#242428]">
+            <span class="text-[#7a797b] block">PRIMARY</span>
+            <span class="text-[#f5f4ef] font-semibold">Ivory #f5f4ef</span>
+          </div>
+          <div class="bg-[#0d0d0e] p-2 rounded border border-[#242428]">
+            <span class="text-[#7a797b] block">ACCENT</span>
+            <span class="text-[#f09d79] font-semibold">Peach #f09d79</span>
+          </div>
+        </div>
       </div>
 
       <!-- Live Stream Sidebar -->
-      <div class="space-y-4">
-        <div class="glass-card rounded-xl p-4 shadow-xl">
-          <div class="flex items-center justify-between mb-3 border-b border-slate-800 pb-2">
-            <h3 class="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-2">
-              <span class="w-2 h-2 rounded-full bg-cyan-400 animate-ping"></span>
-              Live Pipeline Stream
-            </h3>
-            <span class="text-[10px] text-cyan-400 font-mono">DETERMINISTIC</span>
-          </div>
-          <div id="logStream" class="space-y-2 max-h-[460px] overflow-y-auto font-mono text-xs pr-1">
-            <div class="p-2 rounded bg-slate-950/70 border border-slate-800 text-slate-500 text-center italic">
-              Ready to ingest PRD.
-            </div>
-          </div>
+      <div class="braid-card rounded-xl p-4 shadow-xl">
+        <div class="flex items-center justify-between mb-3 border-b border-[#242428] pb-2">
+          <h3 class="text-xs font-semibold uppercase tracking-wider text-[#f5f4ef] flex items-center gap-2">
+            <span class="w-1.5 h-1.5 rounded-full bg-[#f09d79] animate-pulse"></span>
+            Pipeline Event Stream
+          </h3>
+          <span class="text-[10px] text-[#7a797b] font-mono">DETERMINISTIC</span>
         </div>
-
-        <div class="glass-card rounded-xl p-4 text-xs text-slate-400 space-y-2.5">
-          <div class="font-bold text-slate-200 uppercase tracking-wider text-[11px] flex items-center gap-2">
-            <span>🛡️</span> Architecture Guarantees
+        <div id="logStream" class="space-y-2 max-h-[380px] overflow-y-auto font-mono text-xs pr-1">
+          <div class="p-2 rounded bg-[#0d0d0e] border border-[#242428] text-[#7a797b] text-center italic">
+            Ready to map repository & plan PRD.
           </div>
-          <ul class="space-y-1.5 list-disc list-inside text-slate-400 leading-relaxed">
-            <li><strong class="text-slate-300">Deterministic Control:</strong> Manifest & loop state owned by code, not LLMs.</li>
-            <li><strong class="text-slate-300">Zero Dropped Files:</strong> Manifest diff auto-requeues gaps.</li>
-            <li><strong class="text-slate-300">AST-Aware Patches:</strong> Never regenerates whole files on revision.</li>
-            <li><strong class="text-slate-300">Dual-Model Review:</strong> Independent critique model reduces blind spots.</li>
-            <li><strong class="text-slate-300">Deterministic Verification:</strong> Tested with real Vitest runner.</li>
-          </ul>
         </div>
       </div>
-    </main>
-  </div>
+
+      <!-- Architectural Invariants -->
+      <div class="braid-card rounded-xl p-4 text-xs text-[#7a797b] space-y-2">
+        <div class="font-semibold text-[#f5f4ef] uppercase tracking-wider text-[11px] flex items-center gap-1.5">
+          <span>🛡️</span> Subsystem Guarantees
+        </div>
+        <ul class="space-y-1 list-disc list-inside text-[#7a797b] leading-relaxed">
+          <li><strong class="text-[#f5f4ef]">Context-Aware:</strong> Reads real AST symbols, imports & tests before planning.</li>
+          <li><strong class="text-[#f5f4ef]">Reuse Enforcement:</strong> Mandates modification over duplication of utilities.</li>
+          <li><strong class="text-[#f5f4ef]">DAG Acyclicity:</strong> Strict DFS cycle detection on task dependencies.</li>
+          <li><strong class="text-[#f5f4ef]">Independent Review:</strong> 11-point critique reduces LLM blind spots.</li>
+          <li><strong class="text-[#f5f4ef]">Zero Dropped Files:</strong> Strict schema contracts & disk verification.</li>
+        </ul>
+      </div>
+    </div>
+  </main>
 
   <script>
-    // Browser interactive driver for live testing & visualization
-    const state = {
+    // -------------------------------------------------------------
+    // Parametric DNA Helix Vector Geometry Engine (Sine Wave Bezier)
+    // -------------------------------------------------------------
+    function computeBraidGeometry(elapsedSeconds, state, speedMultiplier = 1.0) {
+      const stateConfigs = {
+        idle: { wavelength: 32, amplitude: 9.0, strokeWidth: 3.2, speed: 0.65, crossNodeOpacity: 0.0 },
+        planning: { wavelength: 26, amplitude: 10.5, strokeWidth: 3.4, speed: 1.3, crossNodeOpacity: 0.4 },
+        review: { wavelength: 22, amplitude: 11.5, strokeWidth: 3.4, speed: 1.5, crossNodeOpacity: 0.75 },
+        build: { wavelength: 19, amplitude: 12.0, strokeWidth: 3.5, speed: 2.1, crossNodeOpacity: 0.85 },
+        verify: { wavelength: 16, amplitude: 12.5, strokeWidth: 3.6, speed: 2.4, crossNodeOpacity: 1.0 },
+        success: { wavelength: 32, amplitude: 8.5, strokeWidth: 3.2, speed: 0.0, crossNodeOpacity: 0.0 },
+        error: { wavelength: 20, amplitude: 13.0, strokeWidth: 3.4, speed: 0.35, crossNodeOpacity: 0.3 },
+      };
+
+      const cfg = stateConfigs[state] || stateConfigs.idle;
+      const phase = elapsedSeconds * cfg.speed * speedMultiplier * Math.PI * 2;
+      const centerX = 50;
+      const startY = 16;
+      const endY = 84;
+      const height = endY - startY;
+      const numSegments = 16;
+      const stepY = height / numSegments;
+
+      const ptsA = [];
+      const ptsB = [];
+      const crossNodes = [];
+
+      for (let i = 0; i <= numSegments; i++) {
+        const y = startY + i * stepY;
+        const normalizedY = (y - startY) / height;
+        const taper = Math.sin(normalizedY * Math.PI);
+        const wave = Math.sin((y / cfg.wavelength) * Math.PI * 2 + phase);
+
+        const xA = centerX + wave * cfg.amplitude * taper;
+        const xB = centerX - wave * cfg.amplitude * taper;
+
+        ptsA.push({ x: xA, y });
+        ptsB.push({ x: xB, y });
+
+        if (i > 0 && i < numSegments && Math.abs(wave) < 0.18) {
+          crossNodes.push({
+            x: centerX,
+            y,
+            opacity: (1 - Math.abs(wave) / 0.18) * cfg.crossNodeOpacity,
+          });
+        }
+      }
+
+      function buildPath(pts) {
+        if (pts.length < 2) return '';
+        let d = `M ${pts[0].x.toFixed(2)} ${pts[0].y.toFixed(2)}`;
+        for (let i = 1; i < pts.length; i++) {
+          const prev = pts[i - 1];
+          const curr = pts[i];
+          const midX = (prev.x + curr.x) / 2;
+          const midY = (prev.y + curr.y) / 2;
+          d += ` Q ${prev.x.toFixed(2)} ${prev.y.toFixed(2)}, ${midX.toFixed(2)} ${midY.toFixed(2)}`;
+        }
+        const last = pts[pts.length - 1];
+        d += ` T ${last.x.toFixed(2)} ${last.y.toFixed(2)}`;
+        return d;
+      }
+
+      return {
+        strandA: buildPath(ptsA),
+        strandB: buildPath(ptsB),
+        strokeWidth: cfg.strokeWidth,
+        crossNodes,
+      };
+    }
+
+    // Motion animation state & loop
+    let currentMotionState = 'idle';
+    let animStartTime = performance.now();
+
+    function renderSvgMark(svgPrefix, geometry, state) {
+      const strandA = document.getElementById(`${svgPrefix}StrandA`);
+      const strandB = document.getElementById(`${svgPrefix}StrandB`);
+      const crossGroup = document.getElementById(`${svgPrefix}CrossNodes`);
+
+      if (strandA) {
+        strandA.setAttribute('d', geometry.strandA);
+        strandA.setAttribute('stroke-width', geometry.strokeWidth);
+      }
+      if (strandB) {
+        strandB.setAttribute('d', geometry.strandB);
+        strandB.setAttribute('stroke-width', geometry.strokeWidth);
+      }
+      if (crossGroup) {
+        crossGroup.innerHTML = geometry.crossNodes
+          .map(n => `<circle cx="${n.x.toFixed(2)}" cy="${n.y.toFixed(2)}" r="1.3" fill="#f09d79" opacity="${(n.opacity * 0.8).toFixed(2)}" />`)
+          .join('');
+      }
+    }
+
+    function animateLoop(now) {
+      const elapsed = (now - animStartTime) / 1000;
+      const geom = computeBraidGeometry(elapsed, currentMotionState, 1.0);
+      renderSvgMark('header', geom, currentMotionState);
+      renderSvgMark('preview', geom, currentMotionState);
+      requestAnimationFrame(animateLoop);
+    }
+    requestAnimationFrame(animateLoop);
+
+    function setMotionState(stateName) {
+      currentMotionState = stateName;
+      document.getElementById('badgeCurrentState').innerText = stateName;
+      document.getElementById('previewStateLabel').innerText = `STATE: ${stateName.toUpperCase()}`;
+
+      // Update state buttons styling
+      document.querySelectorAll('.state-btn').forEach(btn => {
+        const isMatch = btn.dataset.state === stateName;
+        btn.className = isMatch
+          ? 'state-btn px-2 py-1 rounded text-[11px] font-bold bg-[#f5f4ef] text-[#0d0d0e] transition'
+          : 'state-btn px-2 py-1 rounded text-[11px] font-medium text-[#7a797b] hover:text-[#f5f4ef] transition';
+      });
+    }
+    setMotionState('idle');
+
+    // -------------------------------------------------------------
+    // Interactive SDLC Pipeline Controller
+    // -------------------------------------------------------------
+    const pipelineState = {
       currentStage: 'PLAN',
       agileCycle: 1,
       project: 'sample_task_api',
       plan: null,
       review: null,
-      report: null
+      report: null,
     };
 
     const logsContainer = document.getElementById('logStream');
     function log(stage, msg) {
       const time = new Date().toLocaleTimeString();
       const div = document.createElement('div');
-      div.className = 'p-2 rounded bg-slate-950/80 border border-slate-800 text-[11px] leading-snug';
-      div.innerHTML = `<div class="flex justify-between text-[10px] text-slate-500 mb-0.5"><span class="text-cyan-400 font-bold">[${stage}]</span><span>${time}</span></div><div class="text-slate-300">${msg}</div>`;
+      div.className = 'p-2 rounded bg-[#0d0d0e] border border-[#242428] text-[11px] leading-snug';
+      div.innerHTML = `
+        <div class="flex justify-between text-[10px] text-[#7a797b] mb-0.5">
+          <span class="text-[#f09d79] font-mono font-semibold">[${stage}]</span>
+          <span>${time}</span>
+        </div>
+        <div class="text-[#f5f4ef]">${msg}</div>
+      `;
       logsContainer.prepend(div);
     }
 
     const stages = ['PLAN', 'REVIEW', 'GATE_REVIEW', 'EXECUTE', 'DEBUG', 'REPORT', 'GATE_REPORT', 'DONE'];
 
     function updateStepper(activeStage) {
-      document.getElementById('headerState').innerText = activeStage;
-      document.getElementById('headerCycle').innerText = '#' + state.agileCycle;
+      document.getElementById('headerCycle').innerText = '#' + pipelineState.agileCycle;
       const activeIdx = stages.indexOf(activeStage);
 
       stages.forEach((st, idx) => {
@@ -194,201 +404,233 @@
         const text = el.querySelector('span');
 
         if (idx === activeIdx) {
-          num.className = 'step-num w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold bg-cyan-500 text-slate-950 ring-4 ring-cyan-500/20 shadow-lg shadow-cyan-500/30';
+          num.className = 'step-num w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold bg-[#f5f4ef] text-[#0d0d0e] ring-2 ring-[#f09d79]/40';
           num.innerText = idx + 1;
-          text.className = 'text-xs font-bold text-cyan-400 tracking-wider';
+          text.className = 'text-xs font-bold text-[#f5f4ef] tracking-wider';
         } else if (idx < activeIdx) {
-          num.className = 'step-num w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30';
+          num.className = 'step-num w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold bg-[#1e1e22] text-[#98c379] border border-[#98c379]/40';
           num.innerText = '✓';
-          text.className = 'text-xs font-semibold text-slate-300 tracking-wider';
+          text.className = 'text-xs font-medium text-[#7a797b] tracking-wider';
         } else {
-          num.className = 'step-num w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold bg-slate-800 text-slate-500';
+          num.className = 'step-num w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold bg-[#151517] text-[#38383e] border border-[#242428]';
           num.innerText = idx + 1;
-          text.className = 'text-xs font-semibold text-slate-600 tracking-wider';
+          text.className = 'text-xs font-medium text-[#38383e] tracking-wider';
         }
       });
     }
 
     function renderStage() {
       const area = document.getElementById('mainStageArea');
-      updateStepper(state.currentStage);
+      updateStepper(pipelineState.currentStage);
 
-      if (state.currentStage === 'PLAN') {
+      if (pipelineState.currentStage === 'PLAN') {
+        setMotionState('planning');
         area.innerHTML = `
-          <div class="glass-card p-6 rounded-xl shadow-xl space-y-4">
-            <div class="flex items-center justify-between">
+          <div class="braid-card p-6 rounded-xl space-y-4">
+            <div class="flex items-center justify-between pb-3 border-b border-[#242428]">
               <div>
-                <h2 class="text-xl font-bold text-white flex items-center gap-2">
-                  <span class="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse"></span>
-                  1. PRD Ingestion & Planning Engine
+                <h2 class="text-base font-semibold text-[#f5f4ef] flex items-center gap-2">
+                  <span class="w-2 h-2 rounded-full bg-[#f09d79]"></span>
+                  1. PRD Ingestion & Repository-Aware Planning
                 </h2>
-                <p class="text-xs text-slate-400 mt-1">Accepts freeform or template PRD & generates Task Graph, File Manifest & Test Stubs.</p>
+                <p class="text-xs text-[#7a797b] mt-0.5">Scans repository AST symbols, maps dependencies, and synthesizes an acyclic task graph.</p>
               </div>
-              <button onclick="loadDemoPRD()" class="px-3 py-1.5 text-xs bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-slate-700 rounded-lg">
+              <button onclick="loadDemoPRD()" class="px-3 py-1.5 text-xs bg-[#1e1e22] hover:bg-[#28282e] text-[#f5f4ef] border border-[#2e2e34] rounded-lg transition font-mono">
                 Load Task API PRD
               </button>
             </div>
-            <div>
-              <label class="block text-xs font-semibold text-slate-300 uppercase mb-1">Project Slug Name</label>
-              <input id="projNameInput" type="text" value="${state.project}" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs font-mono text-slate-200">
+            
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <label class="block text-xs font-medium text-[#7a797b] uppercase mb-1">Project Slug</label>
+                <input id="projNameInput" type="text" value="${pipelineState.project}" class="w-full bg-[#0d0d0e] border border-[#242428] focus:border-[#f09d79] rounded-lg px-3 py-2 text-xs font-mono text-[#f5f4ef] outline-none">
+              </div>
+              <div>
+                <label class="block text-xs font-medium text-[#7a797b] uppercase mb-1">Context Analysis Target</label>
+                <input type="text" readonly value="D:\\repo\\Braid (93 files, 868 symbols)" class="w-full bg-[#0d0d0e] border border-[#242428] text-[#7a797b] rounded-lg px-3 py-2 text-xs font-mono">
+              </div>
             </div>
+
             <div>
-              <label class="block text-xs font-semibold text-slate-300 uppercase mb-1">Product Requirements Document (PRD)</label>
-              <textarea id="prdArea" rows="8" class="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-xs font-mono text-slate-200 leading-relaxed"># Task API PRD\n1. User Authentication (JWT sign/verify)\n2. Task Repository (In-memory CRUD)\n3. Unit tests with Vitest stubs</textarea>
+              <label class="block text-xs font-medium text-[#7a797b] uppercase mb-1">PRD Specifications</label>
+              <textarea id="prdArea" rows="7" class="w-full bg-[#0d0d0e] border border-[#242428] focus:border-[#f09d79] rounded-lg p-3 text-xs font-mono text-[#f5f4ef] leading-relaxed outline-none"># Task Management Engine PRD
+1. In-memory task management with priority levels (low, medium, high)
+2. Task prioritization and validation schemas
+3. Vitest unit test suite with 100% assertion coverage</textarea>
             </div>
-            <button onclick="runPlanStage()" id="runPlanBtn" class="w-full py-3 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-bold text-sm rounded-lg shadow-lg glow-cyan transition">
-              Run Autonomous Planning Stage &rarr;
+
+            <button onclick="runPlanStage()" id="runPlanBtn" class="w-full py-2.5 bg-[#f5f4ef] hover:bg-white text-[#0d0d0e] font-semibold text-xs rounded-lg transition">
+              Map Repository & Generate Plan &rarr;
             </button>
           </div>
         `;
-      } else if (state.currentStage === 'REVIEW') {
+      } else if (pipelineState.currentStage === 'REVIEW') {
+        setMotionState('review');
         area.innerHTML = `
-          <div class="glass-card p-12 rounded-xl text-center space-y-4">
-            <div class="w-12 h-12 border-4 border-cyan-500/20 border-t-cyan-400 rounded-full animate-spin mx-auto"></div>
-            <h3 class="text-lg font-bold text-white">Reviewer Model Critiquing Plan...</h3>
-            <p class="text-xs text-slate-400 max-w-md mx-auto">Evaluating architectural feasibility, dependency cycles, and missing edge cases using an independent model.</p>
+          <div class="braid-card p-12 rounded-xl text-center space-y-4">
+            <div class="w-10 h-10 border-2 border-[#242428] border-t-[#f09d79] rounded-full animate-spin mx-auto"></div>
+            <h3 class="text-base font-semibold text-[#f5f4ef]">Independent Review Model Critiquing Plan...</h3>
+            <p class="text-xs text-[#7a797b] max-w-md mx-auto">
+              Running 11 structured checks: requirement completeness, DAG acyclicity, utility reuse verification, and risk detection.
+            </p>
           </div>
         `;
-      } else if (state.currentStage === 'GATE_REVIEW') {
-        const fileList = state.plan.manifest.files.map(f => `<div class="flex justify-between text-xs py-1 border-b border-slate-800/50"><span class="text-cyan-400 font-mono">${f.path}</span><span class="text-slate-500">${f.purpose}</span></div>`).join('');
-        const critList = state.review.critiques.map(c => `<li>${c}</li>`).join('');
-        const riskList = state.review.risks.map(r => `<li>${r}</li>`).join('');
+      } else if (pipelineState.currentStage === 'GATE_REVIEW') {
+        setMotionState('idle');
+        const fileList = pipelineState.plan.manifest.files.map(f => `
+          <div class="flex justify-between items-center text-xs py-1.5 border-b border-[#242428]">
+            <div class="flex items-center gap-2">
+              <span class="px-1.5 py-0.5 rounded text-[10px] font-mono uppercase ${f.action === 'modify' ? 'bg-[#f09d79]/15 text-[#f09d79]' : 'bg-[#98c379]/15 text-[#98c379]'}">${f.action}</span>
+              <span class="text-[#f5f4ef] font-mono text-[11px]">${f.path}</span>
+            </div>
+            <span class="text-[#7a797b] text-[11px]">${f.purpose}</span>
+          </div>
+        `).join('');
+
+        const critList = pipelineState.review.critiques.map(c => `<li>${c}</li>`).join('');
+        const riskList = pipelineState.review.risks.map(r => `<li>${r}</li>`).join('');
 
         area.innerHTML = `
-          <div class="glass-card p-6 rounded-xl border border-indigo-500/40 shadow-2xl space-y-5">
-            <div class="flex justify-between items-center border-b border-slate-800 pb-3">
+          <div class="braid-card p-6 rounded-xl border border-[#38383e] space-y-5">
+            <div class="flex justify-between items-center border-b border-[#242428] pb-3">
               <div>
-                <span class="px-2.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-xs font-bold uppercase">Human Gate 1</span>
-                <h3 class="text-lg font-bold text-white mt-1">Pre-Execution Architectural Sign-Off</h3>
+                <span class="px-2 py-0.5 rounded bg-[#1e1e22] text-[#f09d79] border border-[#2e2e34] text-[10px] font-mono font-semibold uppercase">Human Approval Gate 1</span>
+                <h3 class="text-base font-semibold text-[#f5f4ef] mt-1">Pre-Execution Architectural Sign-Off</h3>
               </div>
-              <div class="px-3 py-1 rounded-lg border border-emerald-500/30 bg-emerald-500/10 text-emerald-400 font-mono text-xs">
-                Risk Score: ${(state.review.riskScore * 100).toFixed(0)}%
+              <div class="px-2.5 py-1 rounded border border-[#98c379]/30 bg-[#98c379]/10 text-[#98c379] font-mono text-xs">
+                Risk Score: ${(pipelineState.review.riskScore * 100).toFixed(0)}%
               </div>
             </div>
 
-            <div class="bg-slate-950 p-3 rounded-lg border border-slate-800">
-              <div class="text-xs font-semibold text-slate-400 uppercase mb-2">Planned Manifest (${state.plan.manifest.files.length} files)</div>
+            <div class="bg-[#0d0d0e] p-3 rounded-lg border border-[#242428]">
+              <div class="text-[11px] font-medium text-[#7a797b] uppercase mb-2">Planned Manifest (${pipelineState.plan.manifest.files.length} verified files)</div>
               <div class="max-h-36 overflow-y-auto pr-1">${fileList}</div>
             </div>
 
             <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
-              <div class="bg-slate-950 p-3 rounded-lg border border-slate-800">
-                <div class="text-amber-400 font-bold mb-1">Architectural Critiques</div>
-                <ul class="list-disc list-inside text-slate-300 space-y-1">${critList}</ul>
+              <div class="bg-[#0d0d0e] p-3 rounded-lg border border-[#242428]">
+                <div class="text-[#f09d79] font-semibold mb-1">Architectural Review Critique</div>
+                <ul class="list-disc list-inside text-[#7a797b] space-y-1">${critList}</ul>
               </div>
-              <div class="bg-slate-950 p-3 rounded-lg border border-slate-800">
-                <div class="text-rose-400 font-bold mb-1">Flagged Risks</div>
-                <ul class="list-disc list-inside text-slate-300 space-y-1">${riskList}</ul>
+              <div class="bg-[#0d0d0e] p-3 rounded-lg border border-[#242428]">
+                <div class="text-[#e06c75] font-semibold mb-1">Identified Project Risks</div>
+                <ul class="list-disc list-inside text-[#7a797b] space-y-1">${riskList}</ul>
               </div>
             </div>
 
-            <div class="flex gap-3 pt-2">
-              <button onclick="approveGateReview()" class="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-lg shadow-lg transition">
+            <div class="flex gap-3 pt-1">
+              <button onclick="approveGateReview()" class="flex-1 py-2.5 bg-[#f5f4ef] hover:bg-white text-[#0d0d0e] font-semibold text-xs rounded-lg transition">
                 ✓ Approve Plan & Execute Skeletons
               </button>
-              <button onclick="rejectGateReview()" class="px-4 py-2.5 bg-slate-800 hover:bg-amber-500/20 border border-slate-700 text-amber-300 text-xs font-bold rounded-lg transition">
+              <button onclick="rejectGateReview()" class="px-4 py-2.5 bg-[#1e1e22] hover:bg-[#28282e] border border-[#2e2e34] text-[#f09d79] text-xs font-semibold rounded-lg transition font-mono">
                 ↺ Request Revisions
               </button>
             </div>
           </div>
         `;
-      } else if (state.currentStage === 'EXECUTE') {
+      } else if (pipelineState.currentStage === 'EXECUTE') {
+        setMotionState('build');
         area.innerHTML = `
-          <div class="glass-card p-12 rounded-xl text-center space-y-4">
-            <div class="w-12 h-12 border-4 border-indigo-500/20 border-t-indigo-400 rounded-full animate-spin mx-auto"></div>
-            <h3 class="text-lg font-bold text-white">Running Chunked Two-Pass Execution...</h3>
-            <p class="text-xs text-slate-400 max-w-md mx-auto">
-              Skeleton pass &rarr; Manifest diff verification &rarr; Digest interface build &rarr; Implementation pass fed by digest & direct dependencies.
+          <div class="braid-card p-12 rounded-xl text-center space-y-4">
+            <div class="w-10 h-10 border-2 border-[#242428] border-t-[#f5f4ef] rounded-full animate-spin mx-auto"></div>
+            <h3 class="text-base font-semibold text-[#f5f4ef]">Running Chunked Two-Pass Execution...</h3>
+            <p class="text-xs text-[#7a797b] max-w-md mx-auto">
+              Pass 1 (Skeleton) &rarr; Manifest diff verification &rarr; Digest interface index &rarr; Pass 2 (Implementation).
             </p>
           </div>
         `;
-      } else if (state.currentStage === 'DEBUG') {
+      } else if (pipelineState.currentStage === 'DEBUG') {
+        setMotionState('verify');
         area.innerHTML = `
-          <div class="glass-card p-12 rounded-xl text-center space-y-4">
-            <div class="w-12 h-12 border-4 border-amber-500/20 border-t-amber-400 rounded-full animate-spin mx-auto"></div>
-            <h3 class="text-lg font-bold text-white">Running Deterministic Test Harness...</h3>
-            <p class="text-xs text-slate-400 max-w-md mx-auto">
-              Running Vitest test runner on smoke tests and stub specifications. Self-loop triage active.
+          <div class="braid-card p-12 rounded-xl text-center space-y-4">
+            <div class="w-10 h-10 border-2 border-[#242428] border-t-[#98c379] rounded-full animate-spin mx-auto"></div>
+            <h3 class="text-base font-semibold text-[#f5f4ef]">Executing Deterministic Vitest Test Runner...</h3>
+            <p class="text-xs text-[#7a797b] max-w-md mx-auto">
+              Running smoke tests and test specifications. Automated self-repair triage active.
             </p>
           </div>
         `;
-      } else if (state.currentStage === 'REPORT' || state.currentStage === 'GATE_REPORT' || state.currentStage === 'DONE') {
-        const rows = state.report.prdCoverage.map(c => `
-          <tr class="border-b border-slate-800/60">
-            <td class="px-3 py-2 text-slate-200">${c.requirement}</td>
-            <td class="px-3 py-2"><span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">${c.status}</span></td>
-            <td class="px-3 py-2 font-mono text-cyan-400 text-[11px]">${c.files.join(', ')}</td>
+      } else if (pipelineState.currentStage === 'REPORT' || pipelineState.currentStage === 'GATE_REPORT' || pipelineState.currentStage === 'DONE') {
+        const rows = pipelineState.report.prdCoverage.map(c => `
+          <tr class="border-b border-[#242428]">
+            <td class="px-3 py-2 text-[#f5f4ef]">${c.requirement}</td>
+            <td class="px-3 py-2"><span class="px-2 py-0.5 rounded text-[10px] font-mono uppercase bg-[#98c379]/15 text-[#98c379] border border-[#98c379]/30">${c.status}</span></td>
+            <td class="px-3 py-2 font-mono text-[#f09d79] text-[11px]">${c.files.join(', ')}</td>
           </tr>
         `).join('');
 
+        if (pipelineState.currentStage === 'DONE') {
+          setMotionState('success');
+        }
+
         area.innerHTML = `
           <div class="space-y-5">
-            <div class="glass-card p-6 rounded-xl space-y-5">
-              <div class="flex justify-between items-center border-b border-slate-800 pb-3">
+            <div class="braid-card p-6 rounded-xl space-y-5">
+              <div class="flex justify-between items-center border-b border-[#242428] pb-3">
                 <div>
-                  <h3 class="text-lg font-bold text-white flex items-center gap-2">
-                    <span class="w-2.5 h-2.5 rounded-full bg-emerald-400"></span>
-                    Verified Cycle Report
+                  <h3 class="text-base font-semibold text-[#f5f4ef] flex items-center gap-2">
+                    <span class="w-2 h-2 rounded-full bg-[#98c379]"></span>
+                    Verified Agile Cycle Report
                   </h3>
-                  <p class="text-xs text-slate-400">Deterministic metrics from test runner & manifest diff.</p>
+                  <p class="text-xs text-[#7a797b]">Deterministic verification metrics from Vitest runner & manifest store.</p>
                 </div>
                 <div class="flex gap-4 text-right">
                   <div>
-                    <div class="text-[10px] font-bold text-slate-500 uppercase">Completeness</div>
-                    <div class="text-xl font-bold font-mono text-emerald-400">${state.report.manifestCompleteness}%</div>
+                    <div class="text-[10px] font-semibold text-[#7a797b] uppercase">Completeness</div>
+                    <div class="text-lg font-bold font-mono text-[#98c379]">${pipelineState.report.manifestCompleteness}%</div>
                   </div>
                   <div>
-                    <div class="text-[10px] font-bold text-slate-500 uppercase">Stub Tests</div>
-                    <div class="text-xl font-bold font-mono text-cyan-400">${state.report.testResults.stubs.passed} Passing</div>
+                    <div class="text-[10px] font-semibold text-[#7a797b] uppercase">Unit Tests</div>
+                    <div class="text-lg font-bold font-mono text-[#f5f4ef]">${pipelineState.report.testResults.stubs.passed} Passing</div>
                   </div>
                 </div>
               </div>
 
-              <div class="bg-slate-950 p-3 rounded-lg border border-slate-800">
-                <div class="text-xs font-semibold text-slate-400 uppercase mb-1">Diff Summary</div>
-                <div class="text-xs text-slate-300 font-mono">${state.report.diffSummary}</div>
+              <div class="bg-[#0d0d0e] p-3 rounded-lg border border-[#242428]">
+                <div class="text-[11px] font-medium text-[#7a797b] uppercase mb-1">Diff Summary</div>
+                <div class="text-xs text-[#f5f4ef] font-mono">${pipelineState.report.diffSummary}</div>
               </div>
 
               <div>
-                <div class="text-xs font-semibold text-slate-400 uppercase mb-2">PRD Coverage Matrix</div>
-                <div class="overflow-x-auto border border-slate-800 rounded-lg">
+                <div class="text-[11px] font-medium text-[#7a797b] uppercase mb-2">PRD Coverage Traceability</div>
+                <div class="overflow-x-auto border border-[#242428] rounded-lg">
                   <table class="w-full text-left text-xs">
-                    <thead class="bg-slate-950 text-slate-400 uppercase border-b border-slate-800">
+                    <thead class="bg-[#0d0d0e] text-[#7a797b] uppercase border-b border-[#242428]">
                       <tr><th class="px-3 py-2">Requirement</th><th class="px-3 py-2">Status</th><th class="px-3 py-2">Manifest Files</th></tr>
                     </thead>
-                    <tbody class="divide-y divide-slate-800/40 bg-slate-900/60">${rows}</tbody>
+                    <tbody class="divide-y divide-[#242428] bg-[#151517]">${rows}</tbody>
                   </table>
                 </div>
               </div>
             </div>
 
-            ${state.currentStage === 'GATE_REPORT' ? `
-              <div class="glass-card p-6 rounded-xl border border-indigo-500/40 shadow-xl space-y-4">
+            ${pipelineState.currentStage === 'GATE_REPORT' ? `
+              <div class="braid-card p-6 rounded-xl border border-[#38383e] space-y-4">
                 <div class="flex justify-between items-center">
                   <div>
-                    <span class="px-2.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-xs font-bold uppercase">Human Gate 2</span>
-                    <h3 class="text-lg font-bold text-white mt-1">Cycle Satisfaction Checkpoint</h3>
+                    <span class="px-2 py-0.5 rounded bg-[#1e1e22] text-[#f09d79] border border-[#2e2e34] text-[10px] font-mono font-semibold uppercase">Human Approval Gate 2</span>
+                    <h3 class="text-base font-semibold text-[#f5f4ef] mt-1">Cycle Satisfaction Checkpoint</h3>
                   </div>
                 </div>
-                <p class="text-xs text-slate-300">Are you satisfied with this cycle's code generation, or do you want an agile iteration?</p>
+                <p class="text-xs text-[#7a797b]">Are you satisfied with this cycle's code generation, or do you want an agile iteration?</p>
                 <div class="flex gap-3">
-                  <button onclick="approveGateReport()" class="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-lg shadow-lg transition">
+                  <button onclick="approveGateReport()" class="flex-1 py-2.5 bg-[#f5f4ef] hover:bg-white text-[#0d0d0e] font-semibold text-xs rounded-lg transition">
                     ✓ Satisfied & Finish Build
                   </button>
-                  <button onclick="rejectGateReport()" class="px-4 py-2.5 bg-slate-800 hover:bg-amber-500/20 border border-slate-700 text-amber-300 text-xs font-bold rounded-lg transition">
-                    ↺ Request Agile Loop Iteration
+                  <button onclick="rejectGateReport()" class="px-4 py-2.5 bg-[#1e1e22] hover:bg-[#28282e] border border-[#2e2e34] text-[#f09d79] text-xs font-semibold rounded-lg transition font-mono">
+                    ↺ Request Agile Iteration
                   </button>
                 </div>
               </div>
             ` : ''}
 
-            ${state.currentStage === 'DONE' ? `
-              <div class="p-6 bg-emerald-950/20 border border-emerald-500/30 rounded-xl text-center space-y-3">
-                <div class="text-3xl">🎉</div>
-                <h3 class="text-lg font-bold text-emerald-400">Autonomous SDLC Build Completed Successfully!</h3>
-                <p class="text-xs text-slate-300">100% manifest completeness & zero dropped logic.</p>
-                <button onclick="restart()" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-lg transition">
-                  Build Another Project
+            ${pipelineState.currentStage === 'DONE' ? `
+              <div class="p-6 bg-[#151517] border border-[#98c379]/30 rounded-xl text-center space-y-3">
+                <div class="text-2xl">🎉</div>
+                <h3 class="text-base font-semibold text-[#98c379]">Autonomous SDLC Build Completed Successfully</h3>
+                <p class="text-xs text-[#7a797b]">100% manifest completeness, 0 dropped files, and all tests passing.</p>
+                <button onclick="restart()" class="px-4 py-2 bg-[#f5f4ef] hover:bg-white text-[#0d0d0e] text-xs font-semibold rounded-lg transition">
+                  Start Another Pipeline
                 </button>
               </div>
             ` : ''}
@@ -406,99 +648,96 @@
     }
 
     function runPlanStage() {
-      state.project = document.getElementById('projNameInput').value;
-      log('PLAN', 'Ingesting PRD for project: ' + state.project);
-      state.currentStage = 'REVIEW';
+      pipelineState.project = document.getElementById('projNameInput').value;
+      log('PLAN', 'Ingesting PRD for project: ' + pipelineState.project);
+      log('CONTEXT', 'Mapped repository symbols (src/services/task.service.ts, src/utils/validation.ts)');
+      pipelineState.currentStage = 'REVIEW';
       renderStage();
 
       setTimeout(() => {
-        state.plan = {
+        pipelineState.plan = {
           manifest: {
-            project: state.project,
+            project: pipelineState.project,
             files: [
-              { path: 'src/auth/token.ts', purpose: 'JWT signing & verification', expectedExports: ['signToken', 'verifyToken'] },
-              { path: 'src/auth/service.ts', purpose: 'User authentication logic', expectedExports: ['AuthService'] },
-              { path: 'src/tasks/repository.ts', purpose: 'In-memory task storage', expectedExports: ['TaskRepository'] },
-              { path: 'src/tasks/controller.ts', purpose: 'Task routing & handlers', expectedExports: ['TaskController'] },
-              { path: 'src/server.ts', purpose: 'Application entrypoint', expectedExports: ['startServer'] }
+              { path: 'src/utils/validation.ts', action: 'modify', purpose: 'Validation schema extensions', expectedExports: ['validateTask'] },
+              { path: 'src/services/task.service.ts', action: 'modify', purpose: 'Priority CRUD handlers', expectedExports: ['TaskService'] },
+              { path: 'src/server.ts', action: 'create', purpose: 'Application entrypoint', expectedExports: ['startServer'] },
             ]
           },
           testStubs: [
-            { file: 'tests/auth.test.ts', name: 'verifies token signing' },
-            { file: 'tests/tasks.test.ts', name: 'verifies task CRUD' }
+            { file: 'tests/task.service.test.ts', name: 'verifies task priority and CRUD' },
           ]
         };
 
-        state.review = {
-          critiques: ['Add UUID validation for task identifiers', 'Include bcrypt password hashing'],
+        pipelineState.review = {
+          critiques: ['Existing validation utility reused (0 duplication)', 'Task dependencies verified acyclic (0 cycles)'],
           risks: ['In-memory store will reset on server restart'],
-          riskScore: 0.15
+          riskScore: 0.12
         };
 
-        log('REVIEW', 'Reviewer emitted critique with 15% risk score.');
-        state.currentStage = 'GATE_REVIEW';
+        log('REVIEW', 'Independent reviewer scored plan: 12% risk. No circular dependencies.');
+        pipelineState.currentStage = 'GATE_REVIEW';
         renderStage();
-      }, 900);
+      }, 1000);
     }
 
     function approveGateReview() {
-      log('GATE 1', 'Human approved plan.');
-      state.currentStage = 'EXECUTE';
+      log('GATE 1', 'Human approved build plan.');
+      pipelineState.currentStage = 'EXECUTE';
       renderStage();
 
       setTimeout(() => {
-        log('EXECUTE', 'Pass 1 (Skeleton): 5/5 files written.');
-        log('EXECUTE', 'Deterministic Manifest Diff: 100% complete.');
-        log('EXECUTE', 'Condensed digest index built.');
-        log('EXECUTE', 'Pass 2 (Implementation): 5/5 files filled.');
-        state.currentStage = 'DEBUG';
+        log('EXECUTE', 'Pass 1 (Skeleton): 3/3 files written.');
+        log('EXECUTE', 'Manifest diff verified: 0 dropped files (100% complete).');
+        log('EXECUTE', 'Pass 2 (Implementation): 3/3 implementations filled.');
+        pipelineState.currentStage = 'DEBUG';
         renderStage();
 
         setTimeout(() => {
-          log('DEBUG', 'Deterministic test runner: 5 smoke tests passed, 2 stub tests passed.');
-          state.report = {
+          log('DEBUG', 'Deterministic test runner: Vitest 2.1.9 passed 24/24 tests.');
+          pipelineState.report = {
             manifestCompleteness: 100,
             testResults: {
               smoke: { passed: 5, failed: 0 },
               regression: { passed: 0, failed: 0 },
-              stubs: { passed: 2, failed: 0 }
+              stubs: { passed: 24, failed: 0 }
             },
-            diffSummary: 'Generated 5 TypeScript source files with JWT auth and in-memory CRUD operations.',
+            diffSummary: 'Generated priority handlers and reused validation.ts with 100% test pass rate.',
             flaggedRisks: [],
             prdCoverage: [
-              { requirement: 'User Authentication (JWT)', status: 'implemented', files: ['src/auth/token.ts', 'src/auth/service.ts'] },
-              { requirement: 'Task CRUD Operations', status: 'implemented', files: ['src/tasks/repository.ts', 'src/tasks/controller.ts'] },
-              { requirement: 'Application Entrypoint', status: 'implemented', files: ['src/server.ts'] }
+              { requirement: 'Task Prioritization & Storage', status: 'verified', files: ['src/services/task.service.ts'] },
+              { requirement: 'Input Validation Reuse', status: 'verified', files: ['src/utils/validation.ts'] },
+              { requirement: 'Server Entrypoint', status: 'verified', files: ['src/server.ts'] }
             ]
           };
 
-          state.currentStage = 'GATE_REPORT';
+          pipelineState.currentStage = 'GATE_REPORT';
           renderStage();
-        }, 800);
-      }, 1000);
+        }, 900);
+      }, 1100);
     }
 
     function rejectGateReview() {
       log('GATE 1', 'Human requested plan revisions.');
-      state.currentStage = 'PLAN';
+      pipelineState.currentStage = 'PLAN';
       renderStage();
     }
 
     function approveGateReport() {
       log('GATE 2', 'Human approved cycle report.');
-      state.currentStage = 'DONE';
+      pipelineState.currentStage = 'DONE';
       renderStage();
     }
 
     function rejectGateReport() {
-      state.agileCycle++;
-      log('AGILE LOOP', 'Triggering Agile Cycle #' + state.agileCycle + ' with new feedback.');
-      state.currentStage = 'PLAN';
+      pipelineState.agileCycle++;
+      log('AGILE LOOP', 'Triggering Agile Cycle #' + pipelineState.agileCycle + ' with human feedback.');
+      pipelineState.currentStage = 'PLAN';
       renderStage();
     }
 
     function restart() {
-      state.currentStage = 'PLAN';
+      pipelineState.currentStage = 'PLAN';
       renderStage();
     }
 
