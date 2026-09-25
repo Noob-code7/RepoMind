@@ -3,14 +3,31 @@
  * Clean, modular public API of the Braid AI Planning & Review Engine + Context Mapping subsystem.
  * Exposes core functions for consumption by the downstream Braid CLI / Orchestrator.
  */
+import { ContextMapBuilder } from './context/context_map.js';
 import { buildRepositoryContext } from './context/mapper.js';
+import { ImpactAnalyzer } from './context/impact_analyzer.js';
+import { renderContextMap } from './context/renderer.js';
 import {
   ContextAssessment,
+  ContextEdge,
+  ContextEdgeSchema,
+  ContextEdgeType,
+  ContextEdgeTypeSchema,
   ContextGap,
+  ContextImpactAnalysis,
+  ContextImpactAnalysisSchema,
+  ContextMap,
+  ContextMapSchema,
+  ContextNode,
+  ContextNodeSchema,
+  ContextNodeType,
+  ContextNodeTypeSchema,
   FileContext,
   RelevantContext,
   RepositoryContext,
   RepositoryContextSchema,
+  RequirementContext,
+  RequirementContextSchema,
   SymbolContext,
   TestContext,
 } from './context/schemas.js';
@@ -58,6 +75,13 @@ export type {
   ContextGap,
   ContextAssessment,
   RelevantContext,
+  ContextNode,
+  ContextNodeType,
+  ContextEdge,
+  ContextEdgeType,
+  ContextImpactAnalysis,
+  ContextMap,
+  RequirementContext,
   Requirement,
   Task,
   ManifestEntry,
@@ -72,6 +96,17 @@ export type {
   FindingCategory,
   LLMProvider,
   LLMRequest,
+};
+
+// Re-export Schemas
+export {
+  ContextMapSchema,
+  ContextNodeSchema,
+  ContextNodeTypeSchema,
+  ContextEdgeSchema,
+  ContextEdgeTypeSchema,
+  ContextImpactAnalysisSchema,
+  RequirementContextSchema,
 };
 
 // Re-export Providers
@@ -89,6 +124,9 @@ export {
   revisePlan,
   runPlanningReviewCycle,
   PrdParser,
+  ContextMapBuilder,
+  ImpactAnalyzer,
+  renderContextMap,
 };
 
 // Re-export Orchestrator & Execution Boundary
@@ -99,6 +137,7 @@ export {
   planToExecutionManifest,
 } from './orchestrator/index.js';
 export type {
+  ContextWorkflowOptions,
   PlanWorkflowResult,
   ReviewWorkflowResult,
   ApproveWorkflowResult,
@@ -111,6 +150,13 @@ export type {
   ExecutorInterface,
   ExecutorOptions,
 } from './orchestrator/execution_boundary.js';
+
+/**
+ * Validate a ContextMap against Zod schema.
+ */
+export function validateContextMap(map: unknown): ContextMap {
+  return ContextMapSchema.parse(map);
+}
 
 /**
  * Validate a PlanningResult against Zod schema and semantic rules.
@@ -151,3 +197,4 @@ export function validatePlanningReviewPackage(
 ): PlanningReviewPackage {
   return PlanningReviewPackageSchema.parse(pkg);
 }
+

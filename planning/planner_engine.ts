@@ -13,6 +13,8 @@ import { DuplicationDetector } from './duplication_detector.js';
 import { PrdParser } from './prd_parser.js';
 import { PlanningResult, PlanningResultSchema } from './schemas.js';
 
+import { ContextMap } from '../context/schemas.js';
+
 export interface GeneratePlanOptions {
   prd: string;
   context: RepositoryContext;
@@ -20,18 +22,19 @@ export interface GeneratePlanOptions {
   runId?: string;
   feedback?: string;
   previousPlan?: PlanningResult;
+  contextMap?: ContextMap;
 }
 
 export async function generatePlan(
   options: GeneratePlanOptions,
 ): Promise<PlanningResult> {
-  const { prd, context, planner, feedback } = options;
+  const { prd, context, planner, feedback, contextMap } = options;
   const runId = options.runId || `braid_${Date.now()}`;
 
   // 1. Ingest and parse PRD
   const parsedPrd = PrdParser.parse(prd);
 
-  // 2. Analyze repository relevance & context gaps
+  // 2. Analyze repository relevance & context gaps (reuse ContextMap if provided)
   const relevantContext = ContextRelevanceEngine.analyzeRelevance(prd, context);
 
   // 3. Build compact codebase digest
@@ -57,6 +60,37 @@ CRITICAL RULES:
 6. CONTEXT AWARENESS: Explicitly state why files are modified vs created in the reasoning field.
 `;
 
+  // Build Context Map section for prompt
+  const contextMapPrompt = contextMap
+    ? [
+        `=== BRAID CONTEXT MAP (Confidence: ${Math.round(contextMap.confidence * 100)}%) ===`,
+        `Relevant Files (${contextMap.relevantFiles.length}):`,
+        contextMap.relevantFiles
+          .map((f) => {
+            const syms = contextMap.nodes
+              .filter((n) => n.type === 'symbol' && n.path === f)
+              .map((n) => n.name)
+              .slice(0, 4);
+            return `- ${f} (symbols: ${syms.join(', ') || 'none'})`;
+          })
+          .join('\n'),
+        '',
+        `Dependency Relationships (${contextMap.edges.length}):`,
+        contextMap.edges
+          .slice(0, 10)
+          .map((e) => `- ${e.source} --[${e.type}]--> ${e.target}`)
+          .join('\n'),
+        '',
+        `Associated Tests (${contextMap.affectedTests.length}):`,
+        contextMap.affectedTests.map((t) => `- ${t}`).join('\n') || '(None)',
+        '',
+        `Context Gaps (${contextMap.contextGaps.length}):`,
+        contextMap.contextGaps.length > 0
+          ? contextMap.contextGaps.map((g) => `! [${g.type}] in ${g.affectedArea}: ${g.description}`).join('\n')
+          : '(No context gaps detected)',
+      ].join('\n')
+    : '';
+
   const userPrompt = [
     `RUN ID: ${runId}`,
     `PROJECT NAME: ${context.repository.name}`,
@@ -80,6 +114,8 @@ CRITICAL RULES:
     relevantContext.assessment.gaps.length > 0
       ? relevantContext.assessment.gaps.map((g) => `! [${g.type}] in ${g.affectedArea}: ${g.description}`).join('\n')
       : '(No major context gaps)',
+    '',
+    contextMapPrompt ? `${contextMapPrompt}\n` : '',
     '',
     `=== REUSE MANDATES (${reuseOpportunities.length}) ===`,
     reuseOpportunities.length > 0

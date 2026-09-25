@@ -13,9 +13,14 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { ContextMapBuilder } from '../context/context_map.js';
 import { buildRepositoryContext } from '../context/mapper.js';
 import { ContextRelevanceEngine } from '../context/relevance.js';
-import { RepositoryContext, RepositoryContextSchema } from '../context/schemas.js';
+import {
+  ContextMap,
+  RepositoryContext,
+  RepositoryContextSchema,
+} from '../context/schemas.js';
 import { SemanticPlanValidator } from '../planning/dag_validator.js';
 import { DuplicationDetector } from '../planning/duplication_detector.js';
 import { generatePlan } from '../planning/planner_engine.js';
@@ -35,6 +40,16 @@ import {
   ExecutorInterface,
   planToExecutionManifest,
 } from './execution_boundary.js';
+
+export interface ContextWorkflowOptions {
+  prdPath?: string;
+  prdContent?: string;
+  projectRoot?: string;
+  focus?: string;
+  impactTarget?: string;
+  planner?: LLMProvider;
+  onProgress?: (message: string, progress?: number) => void;
+}
 
 export interface PlanWorkflowOptions {
   prdPath?: string;
@@ -353,6 +368,56 @@ export class PipelineOrchestrator {
   }
 
   // ---------------------------------------------------------------------------
+  // 0. CONTEXT WORKFLOW
+  // ---------------------------------------------------------------------------
+  public static async context(options: ContextWorkflowOptions = {}): Promise<ContextMap> {
+    const root = options.projectRoot || process.cwd();
+
+    if (options.onProgress) {
+      options.onProgress('Scanning repository...', 15);
+    }
+    const repoContext = await buildRepositoryContext({ root });
+
+    let prdText = options.prdContent || '';
+    if (!prdText && options.prdPath) {
+      const p = path.resolve(root, options.prdPath);
+      if (fs.existsSync(p)) {
+        prdText = fs.readFileSync(p, 'utf-8');
+      }
+    }
+
+    if (options.onProgress) {
+      options.onProgress('Mapping dependencies...', 35);
+    }
+
+    if (options.onProgress) {
+      options.onProgress('Resolving symbols...', 55);
+    }
+
+    if (options.onProgress) {
+      options.onProgress('Matching PRD requirements...', 75);
+    }
+
+    const contextMap = await ContextMapBuilder.generate({
+      root,
+      prdContent: prdText,
+      focus: options.focus,
+      impactTarget: options.impactTarget,
+      context: repoContext,
+      planner: options.planner,
+    });
+
+    if (options.onProgress) {
+      options.onProgress('Building context...', 95);
+    }
+
+    // Persist to .braid/context.json
+    ContextMapBuilder.save(root, contextMap);
+
+    return contextMap;
+  }
+
+  // ---------------------------------------------------------------------------
   // 1. PLAN WORKFLOW
   // ---------------------------------------------------------------------------
   public static async plan(options: PlanWorkflowOptions = {}): Promise<PlanWorkflowResult> {
@@ -364,7 +429,6 @@ export class PipelineOrchestrator {
       options.onProgress('Detecting repository & mapping AST symbols...', 15);
     }
     const context = await buildRepositoryContext({ root });
-    fs.writeFileSync(path.join(braidDir, 'context.json'), JSON.stringify(context, null, 2), 'utf-8');
 
     // 2. Read PRD content
     let prdText = options.prdContent || '';
@@ -384,13 +448,31 @@ export class PipelineOrchestrator {
     }
     fs.writeFileSync(path.join(braidDir, 'prd.txt'), prdText, 'utf-8');
 
-    // 3. Analyze PRD & identify relevant files
+    // 3. Analyze PRD & identify relevant files via Context Map
     if (options.onProgress) {
       options.onProgress('Analyzing PRD & computing relevance index...', 40);
     }
+
+    // Check if Context Map already exists in .braid/context.json
+    let contextMap: ContextMap | undefined;
+    const loaded = ContextMapBuilder.load(root, context);
+    if (loaded && !loaded.repositoryChanged) {
+      contextMap = loaded.map;
+    } else {
+      if (loaded?.repositoryChanged && loaded.warning) {
+        console.warn(`\n  [Braid Warning] ${loaded.warning}\n`);
+      }
+      contextMap = await ContextMapBuilder.generate({
+        root,
+        prdContent: prdText,
+        context,
+      });
+      ContextMapBuilder.save(root, contextMap);
+    }
+
     const relevant = ContextRelevanceEngine.analyzeRelevance(prdText, context);
 
-    // 4. Generate plan
+    // 4. Generate plan consuming ContextMap
     if (options.onProgress) {
       options.onProgress('Generating acyclic task DAG & file manifest...', 70);
     }
@@ -399,6 +481,7 @@ export class PipelineOrchestrator {
       prd: prdText,
       context,
       planner,
+      contextMap,
     });
 
     // 5. Semantic Validation
@@ -457,9 +540,17 @@ export class PipelineOrchestrator {
     }
 
     const contextPath = path.join(braidDir, 'context.json');
-    const context = fs.existsSync(contextPath)
-      ? RepositoryContextSchema.parse(JSON.parse(fs.readFileSync(contextPath, 'utf-8')))
-      : await buildRepositoryContext({ root });
+    let context: RepositoryContext;
+    if (fs.existsSync(contextPath)) {
+      const raw = JSON.parse(fs.readFileSync(contextPath, 'utf-8'));
+      if (raw.repository && raw.nodes) {
+        context = RepositoryContextSchema.parse(raw.repository);
+      } else {
+        context = RepositoryContextSchema.parse(raw);
+      }
+    } else {
+      context = await buildRepositoryContext({ root });
+    }
 
     const prdPath = path.join(braidDir, 'prd.txt');
     const prdText = fs.existsSync(prdPath)
@@ -470,12 +561,14 @@ export class PipelineOrchestrator {
       options.onProgress('Executing 11 independent architectural checks...', 50);
     }
 
+    const loadedContext = ContextMapBuilder.load(root, context);
     const reviewer = options.reviewer || PipelineOrchestrator.resolveReviewerProvider();
     const review = await reviewPlan({
       prd: prdText,
       context,
       plan,
       reviewer,
+      contextMap: loadedContext?.map,
     });
 
     const parsedReview = ReviewResultSchema.parse(review);

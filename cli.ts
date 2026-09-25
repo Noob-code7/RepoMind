@@ -11,6 +11,8 @@
  *   $ braid report
  *   $ braid brand
  */
+import fs from 'node:fs';
+import path from 'node:path';
 import {
   ANSI_BOLD,
   ANSI_FAINT,
@@ -23,6 +25,7 @@ import {
   renderCliBanner,
   startCliAnimation,
 } from './brand/cli_mark.js';
+import { renderContextMap } from './context/renderer.js';
 import { PipelineOrchestrator } from './orchestrator/pipeline_orchestrator.js';
 import { setMockHandler } from './shared/llm_client.js';
 import type { FileManifest } from './shared/types.js';
@@ -32,6 +35,10 @@ async function main() {
   const command = (args[0] || 'help').toLowerCase();
 
   switch (command) {
+    case 'context': {
+      await runContextCommand(args.slice(1));
+      break;
+    }
     case 'plan': {
       const prdPath = args[1] || 'PRD.md';
       await runPlanCommand(prdPath);
@@ -79,6 +86,7 @@ function printHelp() {
 
   ${ANSI_PEACH}Commands:${ANSI_RESET}
     ${ANSI_IVORY}repl | tui${ANSI_RESET}          Launch interactive full-screen TUI REPL
+    ${ANSI_IVORY}context [PRD.md]${ANSI_RESET} Build 3-layer semantic context map (supports --json, --focus, --impact)
     ${ANSI_IVORY}plan [PRD.md]${ANSI_RESET}    Map context and generate repository-aware task DAG & manifest
     ${ANSI_IVORY}review [PRD.md]${ANSI_RESET}  Independent architectural critique of the build plan
     ${ANSI_IVORY}approve${ANSI_RESET}          Sign off on plan & generate locked execution manifest
@@ -88,13 +96,94 @@ function printHelp() {
 `);
 }
 
+async function runContextCommand(rawArgs: string[]) {
+  const isJson = rawArgs.includes('--json');
+  let focus: string | undefined;
+  let impactTarget: string | undefined;
+  let prdPath: string | undefined;
+
+  for (let i = 0; i < rawArgs.length; i++) {
+    const arg = rawArgs[i];
+    if (arg === '--json') {
+      continue;
+    } else if (arg === '--focus' && i + 1 < rawArgs.length) {
+      focus = rawArgs[++i];
+    } else if (arg === '--impact' && i + 1 < rawArgs.length) {
+      impactTarget = rawArgs[++i];
+    } else if (!arg.startsWith('--') && !prdPath) {
+      prdPath = arg;
+    }
+  }
+
+  let projectRoot = process.cwd();
+  if (prdPath) {
+    const absPrd = path.resolve(process.cwd(), prdPath);
+    const prdDir = path.dirname(absPrd);
+    if (fs.existsSync(path.join(prdDir, 'package.json')) && prdDir !== process.cwd()) {
+      projectRoot = prdDir;
+      prdPath = path.basename(absPrd);
+    }
+  }
+
+  const ticker = isJson ? null : startCliAnimation('planning', 'Scanning repository...');
+
+  try {
+    const contextMap = await PipelineOrchestrator.context({
+      prdPath,
+      projectRoot,
+      focus,
+      impactTarget,
+      onProgress(msg, pct) {
+        if (ticker) {
+          ticker.update(msg, pct);
+        }
+      },
+    });
+
+    if (ticker) {
+      await sleep(350);
+      ticker.stop('Context map synthesized.');
+    }
+
+    if (isJson) {
+      console.log(JSON.stringify(contextMap, null, 2));
+    } else {
+      console.log(`
+        ~~~
+       ~   ~
+        \\ /
+        / \\
+       ~   ~
+
+  ${ANSI_BOLD}${ANSI_IVORY}Braid Context Map${ANSI_RESET}
+`);
+      console.log(renderContextMap(contextMap));
+    }
+  } catch (err: any) {
+    if (ticker) ticker.stop('Context mapping failed.');
+    console.error(`\n  ${ANSI_RUST}Context Map Error:${ANSI_RESET} ${err.message}\n`);
+    process.exit(1);
+  }
+}
+
 async function runPlanCommand(prdPath: string) {
+  let projectRoot = process.cwd();
+  let resolvedPrdPath = prdPath;
+  if (prdPath) {
+    const absPrd = path.resolve(process.cwd(), prdPath);
+    const prdDir = path.dirname(absPrd);
+    if (fs.existsSync(path.join(prdDir, 'package.json')) && prdDir !== process.cwd()) {
+      projectRoot = prdDir;
+      resolvedPrdPath = path.basename(absPrd);
+    }
+  }
+
   const ticker = startCliAnimation('planning', 'Analyzing repository...');
 
   try {
     const res = await PipelineOrchestrator.plan({
-      prdPath,
-      projectRoot: process.cwd(),
+      prdPath: resolvedPrdPath,
+      projectRoot,
       onProgress(msg, pct) {
         ticker.update(msg, pct);
       },
@@ -127,12 +216,23 @@ async function runPlanCommand(prdPath: string) {
 }
 
 async function runReviewCommand(prdPath: string) {
+  let projectRoot = process.cwd();
+  let resolvedPrdPath = prdPath;
+  if (prdPath) {
+    const absPrd = path.resolve(process.cwd(), prdPath);
+    const prdDir = path.dirname(absPrd);
+    if (fs.existsSync(path.join(prdDir, 'package.json')) && prdDir !== process.cwd()) {
+      projectRoot = prdDir;
+      resolvedPrdPath = path.basename(absPrd);
+    }
+  }
+
   const ticker = startCliAnimation('review', 'Checking architecture...');
 
   try {
     const res = await PipelineOrchestrator.review({
-      prdPath,
-      projectRoot: process.cwd(),
+      prdPath: resolvedPrdPath,
+      projectRoot,
       onProgress(msg, pct) {
         ticker.update(msg, pct);
       },

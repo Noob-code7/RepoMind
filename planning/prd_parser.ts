@@ -89,7 +89,7 @@ export class PrdParser {
             rawRequirements.push(currentReq);
           }
 
-          const rawTitle = cleanBullet(line.replace(/^#+\s*/, ''));
+          const rawTitle = cleanBullet(line.replace(/^#+\s*/, '')).replace(/^REQ-\d+[:\-]?\s*/i, '');
           const reqType = PrdParser.classifyRequirementType(rawTitle);
 
           // Check for ambiguity in requirement phrasing
@@ -112,6 +112,18 @@ export class PrdParser {
           currentReq.criteria.push(criterion);
         } else if (currentReq) {
           currentReq.desc += ` ${line}`;
+          if (!currentReq.ambiguity) {
+            const lowerLine = line.toLowerCase();
+            const isVague =
+              lowerLine.includes('should be fast') ||
+              lowerLine.includes('etc') ||
+              lowerLine.includes('as needed') ||
+              lowerLine.includes('best practices') ||
+              lowerLine.includes('standard');
+            if (isVague) {
+              currentReq.ambiguity = `Requirement phrasing "${line}" contains vague criteria.`;
+            }
+          }
         }
       }
     }

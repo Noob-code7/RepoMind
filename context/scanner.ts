@@ -14,6 +14,7 @@ import {
 const IGNORED_DIRS = new Set([
   'node_modules',
   '.git',
+  '.braid',
   'dist',
   'build',
   '.next',

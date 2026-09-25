@@ -1,0 +1,10 @@
+{
+  "name": "fixture-context-map",
+  "version": "1.0.0",
+  "dependencies": {
+    "express": "^4.19.0"
+  },
+  "devDependencies": {
+    "vitest": "^2.1.0"
+  }
+}

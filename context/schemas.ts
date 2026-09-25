@@ -140,6 +140,10 @@ export const ContextGapTypeSchema = z.enum([
   'unknown_configuration',
   'insufficient_symbol_information',
   'missing_information',
+  'untested_functionality',
+  'missing_implementation',
+  'unresolved_symbol',
+  'conflicting_responsibilities',
 ]);
 export type ContextGapType = z.infer<typeof ContextGapTypeSchema>;
 
@@ -148,6 +152,7 @@ export const ContextGapSchema = z.object({
   description: z.string(),
   affectedArea: z.string(),
   severity: z.enum(['critical', 'high', 'medium', 'low']).default('medium'),
+  confidence: z.number().min(0).max(1).optional(),
 });
 export type ContextGap = z.infer<typeof ContextGapSchema>;
 
@@ -171,3 +176,98 @@ export const RelevantContextSchema = z.object({
   testContexts: z.array(TestContextSchema).default([]),
 });
 export type RelevantContext = z.infer<typeof RelevantContextSchema>;
+
+// ============================================================================
+// Braid Context Map Schemas (3-Layer Semantic Context Graph)
+// ============================================================================
+
+export const ContextNodeTypeSchema = z.enum([
+  'requirement',
+  'feature',
+  'file',
+  'symbol',
+  'module',
+  'test',
+  'route',
+  'dependency',
+]);
+export type ContextNodeType = z.infer<typeof ContextNodeTypeSchema>;
+
+export const ContextNodeSchema = z.object({
+  id: z.string().min(1),
+  type: ContextNodeTypeSchema,
+  name: z.string().min(1),
+  path: z.string().optional(),
+  symbol: z.string().optional(),
+  relevance: z.number().min(0).max(1).default(1.0),
+  confidence: z.number().min(0).max(1).default(1.0),
+  reason: z.string().optional(),
+});
+export type ContextNode = z.infer<typeof ContextNodeSchema>;
+
+export const ContextEdgeTypeSchema = z.enum([
+  'implements',
+  'depends_on',
+  'imports',
+  'exports',
+  'calls',
+  'tested_by',
+  'affects',
+  'related_to',
+]);
+export type ContextEdgeType = z.infer<typeof ContextEdgeTypeSchema>;
+
+export const ContextEdgeSchema = z.object({
+  source: z.string().min(1),
+  target: z.string().min(1),
+  type: ContextEdgeTypeSchema,
+  confidence: z.number().min(0).max(1).default(1.0),
+});
+export type ContextEdge = z.infer<typeof ContextEdgeSchema>;
+
+export const RequirementContextSchema = z.object({
+  id: z.string().min(1),
+  title: z.string().min(1),
+  description: z.string(),
+  type: z.enum(['functional', 'non_functional', 'constraint', 'user_flow', 'technical']).default('functional'),
+  acceptanceCriteria: z.array(z.string()).default([]),
+  technicalConstraints: z.array(z.string()).default([]),
+  userFlows: z.array(z.string()).default([]),
+  ambiguities: z.array(z.string()).default([]),
+});
+export type RequirementContext = z.infer<typeof RequirementContextSchema>;
+
+export const ContextImpactExplanationSchema = z.object({
+  item: z.string(),
+  reason: z.string(),
+});
+export type ContextImpactExplanation = z.infer<typeof ContextImpactExplanationSchema>;
+
+export const ContextImpactAnalysisSchema = z.object({
+  target: z.string(),
+  riskLevel: z.enum(['low', 'medium', 'high']),
+  directlyAffectedFiles: z.array(z.string()).default([]),
+  indirectlyAffectedFiles: z.array(z.string()).default([]),
+  affectedSymbols: z.array(z.string()).default([]),
+  affectedTests: z.array(z.string()).default([]),
+  dependentModules: z.array(z.string()).default([]),
+  explanations: z.array(ContextImpactExplanationSchema).default([]),
+});
+export type ContextImpactAnalysis = z.infer<typeof ContextImpactAnalysisSchema>;
+
+export const ContextMapSchema = z.object({
+  repository: RepositoryContextSchema,
+  requirements: z.array(RequirementContextSchema).default([]),
+  nodes: z.array(ContextNodeSchema).default([]),
+  edges: z.array(ContextEdgeSchema).default([]),
+  relevantFiles: z.array(z.string()).default([]),
+  affectedTests: z.array(z.string()).default([]),
+  contextGaps: z.array(ContextGapSchema).default([]),
+  impact: ContextImpactAnalysisSchema.optional(),
+  confidence: z.number().min(0).max(1).default(1.0),
+  repositoryHash: z.string().default(''),
+  contextHash: z.string().default(''),
+  generatedAt: z.string().default(''),
+});
+export type ContextMap = z.infer<typeof ContextMapSchema>;
+
