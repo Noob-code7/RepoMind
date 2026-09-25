@@ -42,7 +42,20 @@ import { generateReport } from './agents/reporter/reporter.js';
 import { LoopController, runRepairLoop } from './orchestrator/loop_controller.js';
 import { DigestStore } from './orchestrator/digest_store.js';
 import type { FileManifest, TestResults } from './shared/types.js';
-import { emptyTestResults } from './shared/types.js';
+import { emptyTestResults, totalFailed, totalPassed } from './shared/types.js';
+import { statusCompleteness } from './orchestrator/manifest_diff.js';
+import {
+  eventPipeline,
+  emitRunStarted,
+  emitRunCompleted,
+  emitStageStarted,
+  emitStageCompleted,
+  emitHumanGateDecision,
+  emitTestStarted,
+  emitTestCompleted,
+  emitVerificationCompleted,
+  emitReportGenerated,
+} from './telemetry/index.js';
 
 const BRAID_ROOT = dirname(fileURLToPath(import.meta.url));
 
@@ -193,16 +206,51 @@ function prdToRequirements(prd: string): string[] {
 
 async function cmdPlan(flags: Flags): Promise<void> {
   if (!flags.project) throw new Error('Missing --project <name>');
+  emitRunStarted({
+    projectName: flags.project,
+    prdPath: flags.prd,
+    mock: flags.mock,
+    autoApprove: flags.autoApprove,
+  });
   const prd = readPrd(flags.prd);
   if (flags.mock) installMock(flags.project);
+
+  const planStart = Date.now();
+  emitStageStarted('plan', { modelUsed: config.planModel });
   const plan = await planProject({ project: flags.project, prd, feedback: flags.feedback });
+  emitStageCompleted('plan', {
+    durationMs: Date.now() - planStart,
+    modelUsed: config.planModel,
+    payload: {
+      tasksCount: plan.taskGraph.nodes.length,
+      filesCount: plan.manifest.files.length,
+      stubsCount: plan.testStubs.length,
+    },
+  });
   setMockManifest(plan.manifest);
 
+  const reviewStart = Date.now();
+  emitStageStarted('review', { modelUsed: config.reviewModel });
   let review;
   try {
     review = await reviewPlan(prd, plan);
+    emitStageCompleted('review', {
+      durationMs: Date.now() - reviewStart,
+      modelUsed: config.reviewModel,
+      payload: {
+        riskScore: review.riskScore,
+        risksCount: review.risks.length,
+        critiquesCount: review.critiques.length,
+      },
+    });
   } catch (err) {
     review = { critiques: [], risks: [`review unavailable: ${(err as Error).message}`], riskScore: 0.5 };
+    emitStageCompleted('review', {
+      durationMs: Date.now() - reviewStart,
+      modelUsed: config.reviewModel,
+      severity: 'warn',
+      payload: { riskScore: 0.5, error: (err as Error).message },
+    });
   }
   const summary = formatPlanSummary(plan, review);
   console.log(summary);
@@ -216,40 +264,100 @@ async function cmdPlan(flags: Flags): Promise<void> {
   const decision = flags.autoApprove
     ? decideGateReview(true)
     : await promptGateReview(summary);
+  emitHumanGateDecision({
+    gate: 1,
+    gateName: 'gate_review',
+    approved: decision.approved,
+    hasFeedback: Boolean(decision.feedback),
+    feedbackLength: decision.feedback?.length,
+    autoApproved: flags.autoApprove,
+  });
   if (!decision.approved) {
     console.log(`\nGate 1: REJECTED — feedback saved. Re-run with --feedback "...":\n${decision.feedback}`);
     writeFileSync(join(outDir, 'gate1-feedback.txt'), (decision.feedback ?? '') + '\n');
+    emitRunCompleted({ status: 'rejected_gate1' });
+    await eventPipeline.flush();
     process.exitCode = 2;
   } else {
     console.log('\nGate 1: APPROVED.');
+    emitRunCompleted({ status: 'completed' });
+    await eventPipeline.flush();
   }
 }
 
 async function cmdRun(flags: Flags): Promise<void> {
   if (!flags.project) throw new Error('Missing --project <name>');
+  emitRunStarted({
+    projectName: flags.project,
+    prdPath: flags.prd,
+    mock: flags.mock,
+    smokeOnly: flags.smokeOnly,
+    autoApprove: flags.autoApprove,
+  });
   const prd = readPrd(flags.prd);
   if (flags.mock) installMock(flags.project);
 
   // PLAN + REVIEW
+  const planStart = Date.now();
+  emitStageStarted('plan', { modelUsed: config.planModel });
   const plan = await planProject({ project: flags.project, prd, feedback: flags.feedback });
+  emitStageCompleted('plan', {
+    durationMs: Date.now() - planStart,
+    modelUsed: config.planModel,
+    payload: {
+      tasksCount: plan.taskGraph.nodes.length,
+      filesCount: plan.manifest.files.length,
+      stubsCount: plan.testStubs.length,
+    },
+  });
   setMockManifest(plan.manifest);
+
+  const reviewStart = Date.now();
+  emitStageStarted('review', { modelUsed: config.reviewModel });
   let review;
   try {
     review = await reviewPlan(prd, plan);
+    emitStageCompleted('review', {
+      durationMs: Date.now() - reviewStart,
+      modelUsed: config.reviewModel,
+      payload: {
+        riskScore: review.riskScore,
+        risksCount: review.risks.length,
+        critiquesCount: review.critiques.length,
+      },
+    });
   } catch (err) {
     review = { critiques: [], risks: [`review unavailable: ${(err as Error).message}`], riskScore: 0.5 };
+    emitStageCompleted('review', {
+      durationMs: Date.now() - reviewStart,
+      modelUsed: config.reviewModel,
+      severity: 'warn',
+      payload: { riskScore: 0.5, error: (err as Error).message },
+    });
   }
   const planSummary = formatPlanSummary(plan, review);
   console.log(planSummary);
 
   const gate1 = flags.autoApprove ? decideGateReview(true) : await promptGateReview(planSummary);
+  emitHumanGateDecision({
+    gate: 1,
+    gateName: 'gate_review',
+    approved: gate1.approved,
+    hasFeedback: Boolean(gate1.feedback),
+    feedbackLength: gate1.feedback?.length,
+    autoApproved: flags.autoApprove,
+  });
   if (!gate1.approved) {
     console.log(`\nGate 1: REJECTED.\n${gate1.feedback}`);
+    emitRunCompleted({ status: 'rejected_gate1' });
+    await eventPipeline.flush();
     process.exitCode = 2;
     return;
   }
 
   // EXECUTE — mid-execution terminal view (pitch-black, functional color only).
+  const execStart = Date.now();
+  emitStageStarted('execute', { modelUsed: config.executeModel });
   const generatedRoot = resolve(config.generatedRoot);
   const projectRoot = join(generatedRoot, flags.project);
   mkdirSync(projectRoot, { recursive: true });
@@ -283,9 +391,23 @@ async function cmdRun(flags: Flags): Promise<void> {
   console.log('○ Run smoke tests');
   console.log('○ Run regression tests');
   console.log('○ Generate report');
+  emitStageCompleted('execute', {
+    durationMs: Date.now() - execStart,
+    modelUsed: config.executeModel,
+    payload: {
+      implementedCount: changedFiles.length,
+      totalCount: store.snapshot().files.length,
+    },
+  });
 
   // DEBUG (+ capped self-loop repair)
   console.log('\n--- DEBUG ---');
+  const debugStart = Date.now();
+  emitStageStarted('debug', { modelUsed: config.triageModel });
+  emitTestStarted({
+    testType: flags.smokeOnly ? 'smoke' : 'all',
+    stubsCount: plan.testStubs.length,
+  });
   const controller = new LoopController();
   let results: TestResults;
   const risks: string[] = [...review.risks];
@@ -324,27 +446,85 @@ async function cmdRun(flags: Flags): Promise<void> {
       if (!repaired.converged) risks.push('self-loop budget exhausted with failing tests');
     }
   }
+  emitTestCompleted({
+    smokePassed: results.smoke.passed,
+    smokeFailed: results.smoke.failed,
+    stubsPassed: results.stubs.passed,
+    stubsFailed: results.stubs.failed,
+    regressionPassed: results.regression.passed,
+    regressionFailed: results.regression.failed,
+  });
   console.log(`Tests — smoke ${results.smoke.passed}/${results.smoke.failed}, stubs ${results.stubs.passed}/${results.stubs.failed}`);
 
+  const totalFail = results.smoke.failed + results.stubs.failed + results.regression.failed;
+  emitVerificationCompleted({
+    status: totalFail === 0 ? 'passed' : 'failed',
+    smokePassed: results.smoke.passed,
+    smokeFailed: results.smoke.failed,
+    stubsPassed: results.stubs.passed,
+    stubsFailed: results.stubs.failed,
+    manifestCompleteness: statusCompleteness(store.snapshot()),
+    repairAttempts: controller.selfLoops,
+    converged: totalFail === 0,
+  });
+  emitStageCompleted('debug', {
+    durationMs: Date.now() - debugStart,
+    modelUsed: config.triageModel,
+    payload: {
+      totalPassed: totalPassed(results),
+      totalFailed: totalFail,
+      repairAttempts: controller.selfLoops,
+    },
+  });
+
   // REPORT + GATE 2
+  const reportStart = Date.now();
+  emitStageStarted('report', { modelUsed: config.reportModel });
+  const requirements = prdToRequirements(prd);
   const report = await generateReport({
     manifest: store.snapshot(),
     testResults: results,
     changedFiles,
     risks,
-    requirements: prdToRequirements(prd),
+    requirements,
   });
   writeFileSync(join(projectRoot, 'report.json'), JSON.stringify(report, null, 2) + '\n');
   const reportSummary = formatReportSummary(report);
   console.log('\n--- REPORT ---\n' + reportSummary);
+  emitReportGenerated({
+    manifestCompleteness: report.manifestCompleteness,
+    totalPassed: totalPassed(report.testResults),
+    totalFailed: totalFailed(report.testResults),
+    prdCoverageImplemented: report.prdCoverage.filter((c) => c.status === 'implemented').length,
+    prdCoverageTotal: report.prdCoverage.length,
+    flaggedRisksCount: report.flaggedRisks.length,
+    durationMs: Date.now() - reportStart,
+    modelUsed: config.reportModel,
+  });
+  emitStageCompleted('report', {
+    durationMs: Date.now() - reportStart,
+    modelUsed: config.reportModel,
+  });
 
   const gate2 = flags.autoApprove ? decideGateReport(true) : await promptGateReport(reportSummary);
+  emitHumanGateDecision({
+    gate: 2,
+    gateName: 'gate_report',
+    approved: gate2.approved,
+    hasFeedback: Boolean(gate2.feedback),
+    feedbackLength: gate2.feedback?.length,
+    autoApproved: flags.autoApprove,
+  });
   if (!gate2.approved) {
     console.log(`\nGate 2: LOOP BACK TO PLAN.\n${gate2.feedback}`);
     writeFileSync(join(projectRoot, 'gate2-feedback.txt'), (gate2.feedback ?? '') + '\n');
+    emitRunCompleted({ status: 'rejected_gate2' });
+    await eventPipeline.flush();
     process.exitCode = 3;
   } else {
     console.log('\nDone.');
+    emitRunCompleted({ status: 'completed' });
+    await eventPipeline.flush();
   }
 }
 
@@ -355,6 +535,8 @@ async function main(): Promise<void> {
     else if (command === 'run') await cmdRun(flags);
     else console.log(usage());
   } catch (err) {
+    emitRunCompleted({ status: 'failed', error: (err as Error).message });
+    await eventPipeline.flush();
     console.error(`Error: ${(err as Error).message}`);
     process.exitCode = 1;
   }

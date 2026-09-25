@@ -13,6 +13,12 @@ import { DigestStore } from '../../orchestrator/digest_store.js';
 import { runSkeletonPass } from './skeleton_pass.js';
 import { runImplementationPass } from './implementation_pass.js';
 
+import {
+  emitSkeletonStarted,
+  emitManifestCheck,
+  emitImplementationCompleted,
+} from '../../telemetry/index.js';
+
 export interface ExecuteResult {
   afterSkeleton: ManifestDiff;
   afterImplementation: ManifestDiff;
@@ -45,12 +51,24 @@ export async function executeProject(
   projectRoot: string,
   opts: ExecuteOpts = {},
 ): Promise<ExecuteResult> {
+  const startExec = Date.now();
+  emitSkeletonStarted({ plannedCount: store.list().length });
+
   // 1–2. Skeleton pass + diff (missing files must be surfaced, never dropped).
   await runSkeletonPass(store, projectRoot, {
     onActivity: opts.onActivity,
     onThinking: opts.onThinking,
   });
   const afterSkeleton = diffManifestOnDisk(projectRoot, store.snapshot());
+  emitManifestCheck({
+    phase: 'skeleton',
+    plannedCount: store.snapshot().files.length,
+    writtenCount: store.snapshot().files.length - afterSkeleton.missing.length,
+    missingCount: afterSkeleton.missing.length,
+    completeness: afterSkeleton.completeness,
+    passed: afterSkeleton.complete,
+    missingFiles: afterSkeleton.missing,
+  });
   if (!afterSkeleton.complete) {
     throw new Error(
       `[executor] Skeleton pass incomplete, missing: ${afterSkeleton.missing.join(', ')}`,
@@ -71,10 +89,26 @@ export async function executeProject(
     onThinking: opts.onThinking,
   });
   const afterImplementation = diffManifestOnDisk(projectRoot, store.snapshot());
+  emitManifestCheck({
+    phase: 'implementation',
+    plannedCount: store.snapshot().files.length,
+    writtenCount: store.snapshot().files.length - afterImplementation.missing.length,
+    missingCount: afterImplementation.missing.length,
+    completeness: afterImplementation.completeness,
+    passed: afterImplementation.complete,
+    missingFiles: afterImplementation.missing,
+  });
   if (!afterImplementation.complete) {
     throw new Error(
       `[executor] Implementation pass incomplete, missing: ${afterImplementation.missing.join(', ')}`,
     );
   }
+
+  emitImplementationCompleted({
+    totalFiles: store.snapshot().files.length,
+    implementedFiles: store.byStatus('implemented').length,
+    durationMs: Date.now() - startExec,
+  });
+
   return { afterSkeleton, afterImplementation, digest };
 }
