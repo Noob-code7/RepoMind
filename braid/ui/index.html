@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Braid — PRD → governed SDLC</title>
+    <style>
+      body { font-family: system-ui, sans-serif; max-width: 860px; margin: 2rem auto; padding: 0 1rem; }
+      textarea, input[type=text] { width: 100%; margin: 0.25rem 0 1rem; }
+      pre { background: #f4f4f5; padding: 1rem; overflow: auto; }
+      button { margin-right: 0.5rem; }
+    </style>
+  </head>
+  <body>
+    <h1>Braid</h1>
+    <p>PRD in → Plan → Review → Gate 1 → Execute → Debug → Report → Gate 2 → Done.</p>
+    <div id="root"></div>
+    <h2>1. PRD input</h2>
+    <form id="prd-form">
+      <label>Project name: <input type="text" name="project" required /></label>
+      <label>PRD: <textarea name="prd" rows="10" required></textarea></label>
+      <button type="submit">Plan</button>
+    </form>
+    <h2>2. Gates</h2>
+    <p>Run the pipeline CLI-first (<code>npm run demo</code>); paste plan/report summaries here for approval.</p>
+    <h2>3. Report</h2>
+    <div id="report"></div>
+    <script>
+      // Thin glue only — orchestration lives in orchestrator/ + agents/.
+      document.getElementById('prd-form').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const data = new FormData(e.target);
+        document.getElementById('root').dataset.stage = 'submitted';
+        console.log('PRD submitted:', data.get('project'));
+      });
+    </script>
+  </body>
+</html>

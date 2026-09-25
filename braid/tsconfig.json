@@ -3,7 +3,9 @@
     "target": "ES2022",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "lib": ["ES2022"],
+    "lib": ["ES2022", "DOM"],
+    "jsx": "react",
+    "jsxFactory": "h",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
@@ -15,10 +17,13 @@
     "types": ["node"]
   },
   "include": [
+    "cli.ts",
+    "repl.ts",
     "orchestrator/**/*.ts",
     "agents/**/*.ts",
     "human_gate/**/*.ts",
     "shared/**/*.ts",
+    "tui/**/*.ts",
     "tests/**/*.ts",
     "ui/**/*.tsx",
     "ui/**/*.ts"

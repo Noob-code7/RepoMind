@@ -4,11 +4,15 @@
   "private": true,
   "type": "module",
   "description": "Braid — autonomous multi-model SDLC agent with chunked two-pass generation",
+  "bin": {
+    "braid": "./bin/braid.js"
+  },
   "scripts": {
     "build": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "demo": "tsx orchestrator/state_machine.ts",
+    "braid": "tsx cli.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
