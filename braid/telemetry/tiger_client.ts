@@ -5,6 +5,8 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import dns from 'node:dns/promises';
+import net from 'node:net';
 import pg from 'pg';
 const { Pool } = pg;
 
@@ -34,7 +36,7 @@ export class TigerClient {
   /**
    * Lazily initialize or retrieve the shared connection pool.
    */
-  private getPool(): pg.Pool | null {
+  private async getPool(): Promise<pg.Pool | null> {
     if (!this.isEnabled) return null;
     if (this.pool) return this.pool;
 
@@ -43,13 +45,42 @@ export class TigerClient {
         this.connectionString.includes('localhost') ||
         this.connectionString.includes('127.0.0.1');
 
-      this.pool = new Pool({
+      let poolConfig: pg.PoolConfig = {
         connectionString: this.connectionString,
         max: 5,
         idleTimeoutMillis: 30000,
-        connectionTimeoutMillis: 5000,
+        connectionTimeoutMillis: 15000,
         ssl: isLocal ? false : { rejectUnauthorized: false },
-      });
+      };
+
+      if (!isLocal) {
+        try {
+          const parsed = new URL(this.connectionString);
+          if (parsed.hostname && net.isIP(parsed.hostname) === 0) {
+            const lookup = await dns.lookup(parsed.hostname, { family: 4 });
+            if (lookup?.address) {
+              poolConfig = {
+                host: lookup.address,
+                port: Number.parseInt(parsed.port || '5432', 10),
+                user: decodeURIComponent(parsed.username),
+                password: decodeURIComponent(parsed.password),
+                database: parsed.pathname.replace(/^\//, '') || undefined,
+                max: 5,
+                idleTimeoutMillis: 30000,
+                connectionTimeoutMillis: 15000,
+                ssl: {
+                  servername: parsed.hostname,
+                  rejectUnauthorized: false,
+                },
+              };
+            }
+          }
+        } catch {
+          // Fall back to standard connectionString on parsing failure
+        }
+      }
+
+      this.pool = new Pool(poolConfig);
 
       this.pool.on('error', (err) => {
         if (!this.hasWarned) {
@@ -74,7 +105,7 @@ export class TigerClient {
    */
   async initialize(): Promise<boolean> {
     if (!this.isEnabled) return false;
-    const pool = this.getPool();
+    const pool = await this.getPool();
     if (!pool) return false;
 
     try {
@@ -100,7 +131,7 @@ export class TigerClient {
    */
   async insertEvents(events: TelemetryEvent[]): Promise<number> {
     if (!this.isEnabled || events.length === 0) return 0;
-    const pool = this.getPool();
+    const pool = await this.getPool();
     if (!pool) return 0;
 
     const COLS_PER_ROW = 10;
@@ -166,7 +197,7 @@ export class TigerClient {
    */
   async insertStageMetric(metric: StageMetricRecord): Promise<boolean> {
     if (!this.isEnabled) return false;
-    const pool = this.getPool();
+    const pool = await this.getPool();
     if (!pool) return false;
 
     const timestamp =
@@ -229,7 +260,7 @@ export class TigerClient {
    */
   async upsertRun(run: RunRecord): Promise<boolean> {
     if (!this.isEnabled) return false;
-    const pool = this.getPool();
+    const pool = await this.getPool();
     if (!pool) return false;
 
     const startedAt =
@@ -289,7 +320,7 @@ export class TigerClient {
     params: unknown[] = [],
   ): Promise<T[]> {
     if (!this.isEnabled) return [];
-    const pool = this.getPool();
+    const pool = await this.getPool();
     if (!pool) return [];
 
     try {

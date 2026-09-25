@@ -7,6 +7,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { eventPipeline } from './event_pipeline.js';
+import { tigerClient } from './tiger_client.js';
 import type { TelemetryEvent, TelemetryEventType, TelemetrySeverity, TelemetryStage } from './types.js';
 
 export interface ActiveRunContext {
@@ -130,6 +131,18 @@ export function emitRunStarted(args: {
       autoApprove: Boolean(args.autoApprove),
     },
   });
+
+  if (tigerClient.isEnabled) {
+    void tigerClient.upsertRun({
+      runId,
+      projectName: args.projectName,
+      startedAt: new Date(activeRun?.startedAt || Date.now()),
+      status: 'running',
+      prdPath: args.prdPath,
+      metadata: { mock: args.mock, smokeOnly: args.smokeOnly },
+    }).catch(() => {});
+  }
+
   return runId;
 }
 
@@ -153,6 +166,19 @@ export function emitRunCompleted(args: {
       error: args.error,
     },
   });
+
+  if (tigerClient.isEnabled) {
+    const runId = args.runId || activeRun?.runId || 'untracked-run';
+    const projectName = activeRun?.projectName || 'unknown';
+    void tigerClient.upsertRun({
+      runId,
+      projectName,
+      startedAt: new Date(activeRun?.startedAt || Date.now()),
+      completedAt: new Date(),
+      status: args.status,
+      metadata: { error: args.error, durationMs },
+    }).catch(() => {});
+  }
 }
 
 // ----------------------------------------------------------------------------
@@ -195,6 +221,24 @@ export function emitStageCompleted(
     severity: args?.severity,
     payload: args?.payload,
   });
+
+  if (tigerClient.isEnabled) {
+    const runId = args?.runId || activeRun?.runId || 'untracked-run';
+    const cycleId = args?.cycleId ?? activeRun?.cycleId ?? 0;
+    void tigerClient.insertStageMetric({
+      time: new Date(),
+      runId,
+      cycleId,
+      stage,
+      durationMs: args?.durationMs || 0,
+      modelUsed: args?.modelUsed,
+      filesPlanned: typeof args?.payload?.['plannedCount'] === 'number' ? (args.payload['plannedCount'] as number) : undefined,
+      filesGenerated: typeof args?.payload?.['implementedCount'] === 'number' ? (args.payload['implementedCount'] as number) : undefined,
+      testsPassed: typeof args?.payload?.['totalPassed'] === 'number' ? (args.payload['totalPassed'] as number) : undefined,
+      testsFailed: typeof args?.payload?.['totalFailed'] === 'number' ? (args.payload['totalFailed'] as number) : undefined,
+      repairAttempts: typeof args?.payload?.['repairAttempts'] === 'number' ? (args.payload['repairAttempts'] as number) : undefined,
+    }).catch(() => {});
+  }
 }
 
 // ----------------------------------------------------------------------------
