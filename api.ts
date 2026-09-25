@@ -91,6 +91,27 @@ export {
   PrdParser,
 };
 
+// Re-export Orchestrator & Execution Boundary
+export {
+  PipelineOrchestrator,
+  DefaultExecutor,
+  MockExecutor,
+  planToExecutionManifest,
+} from './orchestrator/index.js';
+export type {
+  PlanWorkflowResult,
+  ReviewWorkflowResult,
+  ApproveWorkflowResult,
+  BuildWorkflowResult,
+  BraidReportResult,
+  ApprovalRecord,
+} from './orchestrator/pipeline_orchestrator.js';
+export type {
+  ExecutionBoundaryResult,
+  ExecutorInterface,
+  ExecutorOptions,
+} from './orchestrator/execution_boundary.js';
+
 /**
  * Validate a PlanningResult against Zod schema and semantic rules.
  */

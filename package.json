@@ -5,15 +5,18 @@
   "type": "module",
   "description": "Braid — autonomous multi-model SDLC agent with chunked two-pass generation",
   "scripts": {
-    "build": "tsc --noEmit",
+    "build": "node --single-threaded ./node_modules/typescript/bin/tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "demo": "tsx orchestrator/state_machine.ts",
-    "typecheck": "tsc --noEmit",
-    "braid": "tsx cli.ts",
-    "plan": "tsx cli.ts plan",
-    "review": "tsx cli.ts review",
-    "brand": "tsx cli.ts brand"
+    "demo": "node --single-threaded ./node_modules/tsx/dist/cli.mjs orchestrator/state_machine.ts",
+    "typecheck": "node --single-threaded ./node_modules/typescript/bin/tsc --noEmit",
+    "braid": "node --single-threaded ./node_modules/tsx/dist/cli.mjs cli.ts",
+    "plan": "node --single-threaded ./node_modules/tsx/dist/cli.mjs cli.ts plan",
+    "review": "node --single-threaded ./node_modules/tsx/dist/cli.mjs cli.ts review",
+    "approve": "node --single-threaded ./node_modules/tsx/dist/cli.mjs cli.ts approve",
+    "braid:build": "node --single-threaded ./node_modules/tsx/dist/cli.mjs cli.ts build",
+    "report": "node --single-threaded ./node_modules/tsx/dist/cli.mjs cli.ts report",
+    "brand": "node --single-threaded ./node_modules/tsx/dist/cli.mjs cli.ts brand"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.1",

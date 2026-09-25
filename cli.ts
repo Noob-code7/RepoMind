@@ -1,147 +1,257 @@
 /**
  * cli.ts
- * Braid CLI — Official CLI entrypoint featuring the animated flowing DNA helix motion system.
+ * Braid CLI — Official CLI entrypoint featuring the unified end-to-end SDLC workflow
+ * and the animated flowing DNA helix motion system.
  *
- * Usage:
- *   npx tsx cli.ts plan [PRD.md]
- *   npx tsx cli.ts review [PRD.md]
- *   npx tsx cli.ts brand
+ * Commands:
+ *   $ braid plan [PRD.md]
+ *   $ braid review [PRD.md]
+ *   $ braid approve
+ *   $ braid build
+ *   $ braid report
+ *   $ braid brand
  */
-import fs from 'node:fs';
-import path from 'node:path';
 import {
   ANSI_BOLD,
+  ANSI_FAINT,
   ANSI_IVORY,
   ANSI_MUTED,
   ANSI_PEACH,
   ANSI_RESET,
+  ANSI_RUST,
   ANSI_SAGE,
-  getDnaHelixFrame,
   renderCliBanner,
   startCliAnimation,
 } from './brand/cli_mark.js';
-import { buildRepositoryContext } from './context/mapper.js';
-import { generatePlan } from './planning/planner_engine.js';
-import { MockProvider } from './providers/mock_provider.js';
-import { reviewPlan } from './review/review_engine.js';
+import { PipelineOrchestrator } from './orchestrator/pipeline_orchestrator.js';
 
 async function main() {
   const args = process.argv.slice(2);
-  const command = args[0] || 'help';
+  const command = (args[0] || 'help').toLowerCase();
 
-  if (command === 'brand' || command === 'motion') {
-    runBrandMotionDemo();
-    return;
+  switch (command) {
+    case 'plan': {
+      const prdPath = args[1] || 'PRD.md';
+      await runPlanCommand(prdPath);
+      break;
+    }
+    case 'review': {
+      const prdPath = args[1] || 'PRD.md';
+      await runReviewCommand(prdPath);
+      break;
+    }
+    case 'approve': {
+      await runApproveCommand();
+      break;
+    }
+    case 'build': {
+      await runBuildCommand();
+      break;
+    }
+    case 'report': {
+      runReportCommand();
+      break;
+    }
+    case 'brand':
+    case 'motion': {
+      runBrandMotionDemo();
+      break;
+    }
+    case 'help':
+    default: {
+      printHelp();
+      break;
+    }
   }
+}
 
-  if (command === 'plan') {
-    const prdPath = args[1] || 'PRD.md';
-    await runPlanCommand(prdPath);
-    return;
-  }
-
-  if (command === 'review') {
-    const prdPath = args[1] || 'PRD.md';
-    await runReviewCommand(prdPath);
-    return;
-  }
-
-  // Help output
+function printHelp() {
   console.log(`
   ${ANSI_BOLD}${ANSI_IVORY}Braid${ANSI_RESET} ${ANSI_MUTED}— Autonomous Multi-Model SDLC Orchestrator${ANSI_RESET}
 
   ${ANSI_PEACH}Commands:${ANSI_RESET}
-    ${ANSI_IVORY}plan [PRD.md]${ANSI_RESET}    Map context and generate repository-aware task graph & manifest
+    ${ANSI_IVORY}plan [PRD.md]${ANSI_RESET}    Map context and generate repository-aware task DAG & manifest
     ${ANSI_IVORY}review [PRD.md]${ANSI_RESET}  Independent architectural critique of the build plan
+    ${ANSI_IVORY}approve${ANSI_RESET}          Sign off on plan & generate locked execution manifest
+    ${ANSI_IVORY}build${ANSI_RESET}            Engage execution boundary with two-pass generation engine
+    ${ANSI_IVORY}report${ANSI_RESET}           Synthesize comprehensive PRD coverage & verification report
     ${ANSI_IVORY}brand${ANSI_RESET}            Showcase the official flowing DNA helix motion system
 `);
 }
 
 async function runPlanCommand(prdPath: string) {
-  let prdContent = '';
-  if (fs.existsSync(prdPath)) {
-    prdContent = fs.readFileSync(prdPath, 'utf-8');
-  } else {
-    prdContent = `# Sample Task API PRD\n1. In-memory task management\n2. Task prioritization and validation\n3. Full unit tests with Vitest\n`;
-  }
+  const ticker = startCliAnimation('planning', 'Analyzing repository...');
 
-  console.clear();
-  const ticker = startCliAnimation('planning', 'Analyzing repository architecture...');
-
-  await sleep(600);
-  ticker.update('Mapping inter-file dependencies & symbol index...', 35);
-  const context = await buildRepositoryContext({ root: './' });
-
-  await sleep(700);
-  ticker.update('Generating acyclic task graph & file manifest...', 70);
-
-  // Fallback to mock provider if no API key is in environment
-  const plannerModel = new MockProvider('BraidPlanner', () => {
-    return JSON.stringify({
-      schemaVersion: '1.0.0',
-      runId: `braid_${Date.now()}`,
-      project: { name: context.repository.name },
-      requirements: [
-        { id: 'REQ-001', title: 'Task Core', description: 'Task CRUD', type: 'functional', acceptanceCriteria: ['passes'], ambiguities: [] },
-      ],
-      context: { confidence: 'high', relevantFiles: [], ignoredFiles: [], gaps: [], reasoning: 'solid' },
-      architecture: { overview: 'Layered', reusedPatterns: [], newComponents: [], dataFlow: 'Direct' },
-      tasks: [
-        { id: 'task-1', title: 'Task Service', description: 'Core logic', type: 'modify', dependencies: [], priority: 'high', relatedFiles: ['src/services/task.service.ts'], acceptanceCriteria: ['ok'], risks: [] },
-      ],
-      manifest: [
-        { path: 'src/services/task.service.ts', action: 'modify', purpose: 'Task operations', relatedTasks: ['task-1'], expectedExports: ['TaskService'], expectedSymbols: ['TaskService'], dependencies: [], tests: [], risk: 'low' },
-      ],
-      tests: [
-        { id: 'TEST-001', target: 'src/services/task.service.ts', type: 'unit', description: 'test task operations', assertions: ['expect task created'], relatedRequirements: ['REQ-001'], relatedFiles: ['src/services/task.service.ts'] },
-      ],
-      traceability: [
-        { requirementId: 'REQ-001', tasks: ['task-1'], files: ['src/services/task.service.ts'], tests: ['TEST-001'] },
-      ],
-      risks: [],
-      assumptions: [],
-      unresolvedQuestions: [],
+  try {
+    const res = await PipelineOrchestrator.plan({
+      prdPath,
+      projectRoot: process.cwd(),
+      onProgress(msg, pct) {
+        ticker.update(msg, pct);
+      },
     });
-  });
 
-  const plan = await generatePlan({
-    prd: prdContent,
-    context,
-    planner: plannerModel,
-  });
+    await sleep(400);
+    ticker.stop('Repository mapped and plan synthesized.');
 
-  await sleep(500);
-  ticker.update('Validating strict Zod contracts & DAG acyclicity...', 95);
+    console.log(`
+  ${ANSI_BOLD}${ANSI_IVORY}Braid${ANSI_RESET}
 
-  await sleep(400);
-  ticker.stop('Build plan synthesized & validated.');
+  ${ANSI_MUTED}Analyzing repository...${ANSI_RESET}
+  ${ANSI_FAINT}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${ANSI_RESET}
 
-  console.log(`
-  ${ANSI_SAGE}✓${ANSI_RESET} ${ANSI_IVORY}Repository mapped (${context.files.length} files, ${context.symbols.length} symbols)${ANSI_RESET}
-  ${ANSI_SAGE}✓${ANSI_RESET} ${ANSI_IVORY}${plan.requirements.length} requirements mapped to execution DAG${ANSI_RESET}
-  ${ANSI_SAGE}✓${ANSI_RESET} ${ANSI_IVORY}${plan.tasks.length} tasks generated (0 circular dependencies)${ANSI_RESET}
-  ${ANSI_SAGE}✓${ANSI_RESET} ${ANSI_IVORY}${plan.manifest.length} manifest files declared (zero dropped files)${ANSI_RESET}
-  ${ANSI_SAGE}✓${ANSI_RESET} ${ANSI_IVORY}${plan.tests.length} test specifications generated${ANSI_RESET}
+  ${ANSI_SAGE}✓${ANSI_RESET} ${ANSI_IVORY}Repository mapped (${res.filesMapped} files, ${res.symbolsMapped} symbols)${ANSI_RESET}
+  ${ANSI_SAGE}✓${ANSI_RESET} ${ANSI_IVORY}${res.relevantFilesCount} relevant files identified${ANSI_RESET}
+  ${ANSI_SAGE}✓${ANSI_RESET} ${ANSI_IVORY}${res.requirementsCount} requirements extracted${ANSI_RESET}
+  ${ANSI_SAGE}✓${ANSI_RESET} ${ANSI_IVORY}${res.tasksCount} implementation tasks${ANSI_RESET}
+  ${ANSI_SAGE}✓${ANSI_RESET} ${ANSI_IVORY}${res.filesToModify} files to modify${ANSI_RESET}
+  ${ANSI_SAGE}✓${ANSI_RESET} ${ANSI_IVORY}${res.filesToCreate} files to create${ANSI_RESET}
+  ${ANSI_SAGE}✓${ANSI_RESET} ${ANSI_IVORY}${res.testsCount} test specifications${ANSI_RESET}
 
-  ${ANSI_BOLD}${ANSI_PEACH}Plan ready for independent review.${ANSI_RESET}
+  ${ANSI_PEACH}Plan ready.${ANSI_RESET}
 `);
+  } catch (err: any) {
+    ticker.stop('Planning failed.');
+    console.error(`\n  ${ANSI_RUST}Planning Error:${ANSI_RESET} ${err.message}\n`);
+    process.exit(1);
+  }
 }
 
 async function runReviewCommand(prdPath: string) {
-  console.clear();
-  const ticker = startCliAnimation('review', 'Reviewing build plan with independent architect model...');
+  const ticker = startCliAnimation('review', 'Checking architecture...');
 
-  await sleep(1200);
-  ticker.stop('Architectural review complete.');
+  try {
+    const res = await PipelineOrchestrator.review({
+      prdPath,
+      projectRoot: process.cwd(),
+      onProgress(msg, pct) {
+        ticker.update(msg, pct);
+      },
+    });
 
-  console.log(`
-  ${ANSI_BOLD}${ANSI_PEACH}REVIEW FINDINGS:${ANSI_RESET}
-  ${ANSI_SAGE}✓${ANSI_RESET} ${ANSI_IVORY}Requirement coverage: 100%${ANSI_RESET}
-  ${ANSI_SAGE}✓${ANSI_RESET} ${ANSI_IVORY}Task graph: strict DAG, no cycles${ANSI_RESET}
-  ${ANSI_SAGE}✓${ANSI_RESET} ${ANSI_IVORY}Duplication check: existing utilities reused${ANSI_RESET}
+    await sleep(400);
+    ticker.stop('Review complete.');
 
-  ${ANSI_BOLD}${ANSI_SAGE}STATUS: APPROVED FOR HUMAN APPROVAL GATE${ANSI_RESET}
+    console.log(`
+  ${ANSI_BOLD}${ANSI_IVORY}Braid Review${ANSI_RESET}
+
+  ${ANSI_MUTED}Checking architecture...${ANSI_RESET}
+  ${ANSI_MUTED}Checking requirement coverage...${ANSI_RESET}
+  ${ANSI_MUTED}Checking dependencies...${ANSI_RESET}
+  ${ANSI_MUTED}Checking file manifest...${ANSI_RESET}
+  ${ANSI_MUTED}Checking test coverage...${ANSI_RESET}
+  ${ANSI_MUTED}Checking risks...${ANSI_RESET}
+  ${ANSI_FAINT}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${ANSI_RESET}
+
+  ${ANSI_PEACH}Review complete.${ANSI_RESET}
+
+  ${ANSI_IVORY}${res.warningsCount} warnings${ANSI_RESET}
+  ${ANSI_IVORY}${res.criticalCount} critical issues${ANSI_RESET}
 `);
+
+    if (res.findings.length > 0) {
+      res.findings.forEach((finding, i) => {
+        const color = finding.severity === 'critical' || finding.severity === 'high' ? ANSI_RUST : ANSI_PEACH;
+        console.log(`  ${color}[${i + 1}] ${finding.title}${ANSI_RESET}`);
+        if (finding.recommendation) {
+          console.log(`      ${ANSI_MUTED}→ ${finding.recommendation}${ANSI_RESET}`);
+        }
+      });
+      console.log(`\n  ${ANSI_MUTED}Suggested revisions available.${ANSI_RESET}\n`);
+    } else {
+      console.log(`  ${ANSI_SAGE}✓ 0 issues detected. Plan approved for execution.${ANSI_RESET}\n`);
+    }
+  } catch (err: any) {
+    ticker.stop('Review failed.');
+    console.error(`\n  ${ANSI_RUST}Review Error:${ANSI_RESET} ${err.message}\n`);
+    process.exit(1);
+  }
+}
+
+async function runApproveCommand() {
+  try {
+    const res = await PipelineOrchestrator.approve({
+      projectRoot: process.cwd(),
+      operator: 'human_operator',
+    });
+
+    console.log(`
+  ${ANSI_BOLD}${ANSI_IVORY}Braid Approval${ANSI_RESET}
+  ${ANSI_FAINT}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${ANSI_RESET}
+
+  ${ANSI_SAGE}✓${ANSI_RESET} ${ANSI_IVORY}Plan approved and locked (${res.approval.planRunId})${ANSI_RESET}
+  ${ANSI_SAGE}✓${ANSI_RESET} ${ANSI_IVORY}Execution manifest generated (.braid/execution_manifest.json)${ANSI_RESET}
+  ${ANSI_SAGE}✓${ANSI_RESET} ${ANSI_IVORY}${res.filesQueued} files queued for execution boundary${ANSI_RESET}
+
+  ${ANSI_PEACH}STATUS: APPROVED FOR BUILD${ANSI_RESET}
+`);
+  } catch (err: any) {
+    console.error(`\n  ${ANSI_RUST}Approval Error:${ANSI_RESET} ${err.message}\n`);
+    process.exit(1);
+  }
+}
+
+async function runBuildCommand() {
+  const ticker = startCliAnimation('build', 'Engaging execution boundary...');
+
+  try {
+    const res = await PipelineOrchestrator.build({
+      projectRoot: process.cwd(),
+      onProgress(msg, pct) {
+        ticker.update(msg, pct);
+      },
+    });
+
+    await sleep(400);
+    ticker.stop('Build boundary engaged.');
+
+    console.log(`
+  ${ANSI_BOLD}${ANSI_IVORY}Braid Build${ANSI_RESET}
+
+  ${ANSI_MUTED}Approved plan${ANSI_RESET}
+      ${ANSI_FAINT}↓${ANSI_RESET}
+  ${ANSI_MUTED}Execution manifest${ANSI_RESET}
+      ${ANSI_FAINT}↓${ANSI_RESET}
+  ${ANSI_MUTED}Executor interface${ANSI_RESET}
+
+  ${ANSI_MUTED}Executing approved build manifest...${ANSI_RESET}
+  ${ANSI_FAINT}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${ANSI_RESET}
+
+  ${ANSI_SAGE}✓${ANSI_RESET} ${ANSI_IVORY}${res.manifest.files.length} files received at executor boundary${ANSI_RESET}
+  ${ANSI_SAGE}✓${ANSI_RESET} ${ANSI_IVORY}${res.result.filesToModify} files targeted for modification${ANSI_RESET}
+  ${ANSI_SAGE}✓${ANSI_RESET} ${ANSI_IVORY}${res.result.filesToCreate} files targeted for creation${ANSI_RESET}
+  ${ANSI_SAGE}✓${ANSI_RESET} ${ANSI_IVORY}Two-pass execution boundary ready (0 dropped files)${ANSI_RESET}
+
+  ${ANSI_PEACH}Build complete.${ANSI_RESET}
+`);
+  } catch (err: any) {
+    ticker.stop('Build failed.');
+    console.error(`\n  ${ANSI_RUST}Build Error:${ANSI_RESET} ${err.message}\n`);
+    process.exit(1);
+  }
+}
+
+function runReportCommand() {
+  try {
+    const rep = PipelineOrchestrator.report(process.cwd());
+
+    console.log(`
+  ${ANSI_BOLD}${ANSI_IVORY}BRAID REPORT${ANSI_RESET}
+  ${ANSI_FAINT}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${ANSI_RESET}
+
+  ${ANSI_MUTED}PRD coverage${ANSI_RESET}       ${ANSI_IVORY}${rep.prdCoverage}%${ANSI_RESET}
+  ${ANSI_MUTED}Requirements${ANSI_RESET}       ${ANSI_IVORY}${rep.requirementsSummary}${ANSI_RESET}
+  ${ANSI_MUTED}Planned tasks${ANSI_RESET}      ${ANSI_IVORY}${rep.plannedTasks}${ANSI_RESET}
+  ${ANSI_MUTED}Files affected${ANSI_RESET}     ${ANSI_IVORY}${rep.filesAffected}${ANSI_RESET}
+  ${ANSI_MUTED}Tests specified${ANSI_RESET}    ${ANSI_IVORY}${rep.testsSpecified}${ANSI_RESET}
+  ${ANSI_MUTED}Review issues${ANSI_RESET}      ${ANSI_IVORY}${rep.reviewIssues} unresolved${ANSI_RESET}
+
+  ${ANSI_PEACH}STATUS: ${rep.status}${ANSI_RESET}
+`);
+  } catch (err: any) {
+    console.error(`\n  ${ANSI_RUST}Report Error:${ANSI_RESET} ${err.message}\n`);
+    process.exit(1);
+  }
 }
 
 function runBrandMotionDemo() {

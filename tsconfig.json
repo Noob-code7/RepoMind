@@ -16,7 +16,14 @@
     "types": ["node"]
   },
   "include": [
+    "*.ts",
     "orchestrator/**/*.ts",
+    "brand/**/*.ts",
+    "brand/**/*.tsx",
+    "context/**/*.ts",
+    "planning/**/*.ts",
+    "providers/**/*.ts",
+    "review/**/*.ts",
     "agents/**/*.ts",
     "human_gate/**/*.ts",
     "shared/**/*.ts",

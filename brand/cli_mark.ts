@@ -151,12 +151,31 @@ export function startCliAnimation(
   let currentProgress = 0;
   let lineCount = 0;
 
+  const isTty = Boolean(process.stdout && process.stdout.isTTY);
+
+  if (!isTty) {
+    const output = renderCliBanner(0, currentState, currentMsg, currentProgress);
+    process.stdout.write(output + '\n');
+    return {
+      update(statusMessage: string, progress?: number) {
+        currentMsg = statusMessage;
+        if (typeof progress === 'number') currentProgress = progress;
+      },
+      stop(successMessage?: string) {
+        if (successMessage) {
+          const finalOutput = renderCliBanner(5, 'success', successMessage, 100);
+          process.stdout.write(finalOutput + '\n');
+        }
+      },
+    };
+  }
+
   function render() {
     const output = renderCliBanner(frame, currentState, currentMsg, currentProgress);
     const lines = output.split('\n');
 
     // Clear previous lines if any
-    if (lineCount > 0 && process.stdout.isTTY) {
+    if (lineCount > 0 && isTty) {
       process.stdout.write(`\x1b[${lineCount}A\x1b[0J`);
     }
 
