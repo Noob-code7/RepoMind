@@ -52,10 +52,10 @@ export function initialPipeline(): PipelineMap {
 
 const GLYPH: Record<StageStatus, string> = {
   pending: '○',
-  running: '◌',
-  completed: '●',
+  running: '●',
+  completed: '✓',
   failed: '✕',
-  'awaiting-approval': '◈',
+  'awaiting-approval': '◐',
 };
 
 /** Compact one-line pipeline bar, e.g. `Plan ● → Review ◌ → …`. */

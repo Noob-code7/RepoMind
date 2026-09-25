@@ -29,18 +29,19 @@ export const HOME_SUGGESTIONS: HomeSuggestion[] = [
 
 function glyphFor(status: StageStatus): { glyph: string; color: string } {
   switch (status) {
-    case 'completed': return { glyph: '●', color: C.green };
-    case 'running': return { glyph: '◉', color: C.accent };
-    case 'awaiting-approval': return { glyph: '◈', color: C.amber };
+    case 'completed': return { glyph: '✓', color: C.green };
+    case 'running': return { glyph: '●', color: C.text };
+    case 'awaiting-approval': return { glyph: '◐', color: C.amber };
     case 'failed': return { glyph: '✕', color: C.red };
     default: return { glyph: '○', color: C.muted };
   }
 }
 
 /**
- * Single compact pipeline line, e.g. `PRD ● → Plan ◉ → Review ○ …`.
- * Muted pending · purple active · green done · amber approval · red failed.
- * Pure + width-safe: truncates stage names on very narrow terminals.
+ * Single compact pipeline line, e.g. `Plan ✓ → Execute ● → Debug ○ …`.
+ * Pitch-black traditional terminal: white current, gray pending,
+ * subtle green check for completed, amber in-progress marker, red failed.
+ * No glow, no gradient, no bright branding color.
  */
 export function renderPipelineLine(p: PipelineMap, cols: number): string {
   const narrow = cols < 72;

@@ -99,35 +99,82 @@ export interface ImplementationPassResult {
   implemented: string[];
 }
 
+/** Live activity callback (TUI feed / CLI log). Optional — headless safe. */
+export interface ImplementationPassOpts {
+  onActivity?: (e: {
+    kind: 'read' | 'create' | 'edit';
+    path: string;
+    detail?: string;
+    added?: number;
+    removed?: number;
+    loc?: number;
+  }) => void;
+  onThinking?: (thinking: boolean) => void;
+}
+
+/** Naive line diff: added = new lines absent from old, removed = inverse. */
+export function countDiff(
+  oldSrc: string,
+  newSrc: string,
+): { added: number; removed: number } {
+  const oldLines = oldSrc.split('\n').map((l) => l.trim()).filter(Boolean);
+  const newLines = newSrc.split('\n').map((l) => l.trim()).filter(Boolean);
+  const oldSet = new Set(oldLines);
+  const newSet = new Set(newLines);
+  let added = 0;
+  for (const l of newLines) if (!oldSet.has(l)) added++;
+  let removed = 0;
+  for (const l of oldLines) if (!newSet.has(l)) removed++;
+  return { added, removed };
+}
+
+function countLoc(s: string): number {
+  if (!s) return 0;
+  return s.split('\n').length;
+}
+
 export async function runImplementationPass(
   store: ManifestStore,
   projectRoot: string,
   digest: DigestStore,
+  opts: ImplementationPassOpts = {},
 ): Promise<ImplementationPassResult> {
   const systemPrompt = loadImplementationPrompt();
   const implemented: string[] = [];
   for (const entry of store.list()) {
     const skeleton = readSource(projectRoot, entry.path);
+    opts.onActivity?.({ kind: 'read', path: entry.path, loc: countLoc(skeleton) });
     const deps = entry.dependencies.map((dep) => ({
       path: dep,
       source: readSource(projectRoot, dep),
     }));
-    const code = await complete({
-      stage: 'execute',
-      systemPrompt,
-      userPrompt: buildImplementationUserPrompt({
-        path: entry.path,
-        skeleton,
-        digestPrompt: digest.toPrompt(),
-        dependencies: deps,
-      }),
-      maxTokens: 6000,
-      temperature: 0.2,
-    });
+    for (const d of deps) {
+      opts.onActivity?.({ kind: 'read', path: d.path, loc: countLoc(d.source) });
+    }
+    opts.onThinking?.(true);
+    let code: string;
+    try {
+      code = await complete({
+        stage: 'execute',
+        systemPrompt,
+        userPrompt: buildImplementationUserPrompt({
+          path: entry.path,
+          skeleton,
+          digestPrompt: digest.toPrompt(),
+          dependencies: deps,
+        }),
+        maxTokens: 6000,
+        temperature: 0.2,
+      });
+    } finally {
+      opts.onThinking?.(false);
+    }
     if (!code.trim()) throw new Error(`[implementation_pass] Empty output for ${entry.path}`);
     validateImplementation(entry, code);
+    const { added, removed } = countDiff(skeleton, code);
     writeFileSync(join(projectRoot, entry.path), code.endsWith('\n') ? code : code + '\n', 'utf8');
     store.setStatus(entry.path, 'implemented');
+    opts.onActivity?.({ kind: 'edit', path: entry.path, added, removed });
     // Keep digest fresh after every write (cheap, small, full-coverage).
     const purpose = store.get(entry.path)?.purpose ?? '';
     digest.upsert(entry.path, code, purpose);

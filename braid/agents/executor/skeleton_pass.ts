@@ -63,18 +63,43 @@ export interface SkeletonPassResult {
   missing: string[];
 }
 
+/** Live activity callback (TUI feed / CLI log). Optional — headless safe. */
+export interface SkeletonPassOpts {
+  onActivity?: (e: {
+    kind: 'read' | 'create' | 'edit';
+    path: string;
+    detail?: string;
+    added?: number;
+    removed?: number;
+    loc?: number;
+  }) => void;
+  onThinking?: (thinking: boolean) => void;
+}
+
+function countLines(s: string): number {
+  if (!s) return 0;
+  return s.split('\n').filter((l) => l.length > 0).length;
+}
+
 export async function runSkeletonPass(
   store: ManifestStore,
   projectRoot: string,
+  opts: SkeletonPassOpts = {},
 ): Promise<SkeletonPassResult> {
   const manifest = store.snapshot();
-  const raw = await completeJson<unknown>({
-    stage: 'execute',
-    systemPrompt: loadSkeletonPrompt(),
-    userPrompt: buildSkeletonUserPrompt(manifest),
-    maxTokens: 8000,
-    temperature: 0.1,
-  });
+  opts.onThinking?.(true);
+  let raw: unknown;
+  try {
+    raw = await completeJson<unknown>({
+      stage: 'execute',
+      systemPrompt: loadSkeletonPrompt(),
+      userPrompt: buildSkeletonUserPrompt(manifest),
+      maxTokens: 8000,
+      temperature: 0.1,
+    });
+  } finally {
+    opts.onThinking?.(false);
+  }
   const skeletons = parseSkeletonPayload(raw, manifest);
   const written: string[] = [];
   for (const s of skeletons) {
@@ -83,6 +108,7 @@ export async function runSkeletonPass(
     writeFileSync(abs, s.code.endsWith('\n') ? s.code : s.code + '\n', 'utf8');
     store.setStatus(s.path, 'skeleton');
     written.push(s.path);
+    opts.onActivity?.({ kind: 'create', path: s.path, added: countLines(s.code), removed: 0 });
   }
   const { missing } = diffManifest(store.snapshot(), written);
   return { written, missing };

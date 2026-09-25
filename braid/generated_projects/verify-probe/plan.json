@@ -1,0 +1,56 @@
+{
+  "taskGraph": {
+    "nodes": [
+      {
+        "id": "t1",
+        "title": "Scaffold app",
+        "dependsOn": [],
+        "files": [
+          "src/app.ts"
+        ]
+      },
+      {
+        "id": "t2",
+        "title": "Wire entry",
+        "dependsOn": [
+          "t1"
+        ],
+        "files": [
+          "src/index.ts"
+        ]
+      }
+    ]
+  },
+  "manifest": {
+    "project": "verify-probe",
+    "files": [
+      {
+        "path": "src/app.ts",
+        "purpose": "core logic",
+        "expectedExports": [
+          "build"
+        ],
+        "dependencies": [],
+        "status": "planned"
+      },
+      {
+        "path": "src/index.ts",
+        "purpose": "entry point",
+        "expectedExports": [
+          "main"
+        ],
+        "dependencies": [
+          "src/app.ts"
+        ],
+        "status": "planned"
+      }
+    ]
+  },
+  "testStubs": [
+    {
+      "file": "tests/smoke.test.ts",
+      "name": "demo app builds ok",
+      "code": "import { describe, expect, it } from 'vitest';\nimport { main } from '../src/index.js';\nimport { build } from '../src/app.js';\ndescribe('demo app', () => {\n  it('builds ok', () => { expect(build()).toBe('ok'); });\n  it('mains ok', () => { expect(main()).toBe('ok'); });\n});\n"
+    }
+  ]
+}

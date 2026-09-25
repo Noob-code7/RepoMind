@@ -1,17 +1,19 @@
 /**
- * tui/theme.ts — Restrained OpenCode-inspired palette + layout helpers.
+ * tui/theme.ts — Pitch-black traditional-terminal palette (OpenCode-style).
  * Pure presentation utilities: no fs, no LLM, no orchestration imports.
- * All colors are foreground-only ANSI (no bright backgrounds) and safe
- * in VS Code's integrated terminal + standalone terminals.
+ * True-black background, thin 1px borders, monospace throughout.
+ * Sparse functional color only: green additions/success, red deletions,
+ * amber in-progress/modified, muted blue-gray informational, white primary.
+ * No purple, no bright accent branding.
  */
 
 export const C = {
   reset: '\x1b[0m',
   bold: '\x1b[1m',
   dim: '\x1b[2m',
-  // Muted purple accent (256-color 140 — soft, not neon).
-  accent: '\x1b[38;5;140m',
-  accentBold: '\x1b[1m\x1b[38;5;140m',
+  // No accent branding: active chrome is plain white (traditional terminal).
+  accent: '\x1b[38;5;252m',
+  accentBold: '\x1b[1m\x1b[38;5;252m',
   // Soft white primary, muted gray secondary.
   text: '\x1b[38;5;252m',
   textBold: '\x1b[1m\x1b[38;5;252m',
@@ -23,6 +25,8 @@ export const C = {
   amber: '\x1b[38;5;214m',
   red: '\x1b[38;5;203m',
   redBold: '\x1b[1m\x1b[38;5;203m',
+  // Informational: muted blue-gray (file reads, hints). Not a brand color.
+  blueGray: '\x1b[38;5;103m',
   // App background — painted explicitly so the TUI matches the brand
   // swatch even when the terminal default differs. Truecolor black.
   bg: '\x1b[48;2;0;0;0m',

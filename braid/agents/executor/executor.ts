@@ -19,6 +19,19 @@ export interface ExecuteResult {
   digest: DigestStore;
 }
 
+/** Live callbacks for the mid-execution terminal view. All optional. */
+export interface ExecuteOpts {
+  onActivity?: (e: {
+    kind: 'read' | 'create' | 'edit';
+    path: string;
+    detail?: string;
+    added?: number;
+    removed?: number;
+    loc?: number;
+  }) => void;
+  onThinking?: (thinking: boolean) => void;
+}
+
 function readSourceOrEmpty(projectRoot: string, rel: string): string {
   try {
     return readFileSync(join(projectRoot, rel), 'utf8');
@@ -30,9 +43,13 @@ function readSourceOrEmpty(projectRoot: string, rel: string): string {
 export async function executeProject(
   store: ManifestStore,
   projectRoot: string,
+  opts: ExecuteOpts = {},
 ): Promise<ExecuteResult> {
   // 1–2. Skeleton pass + diff (missing files must be surfaced, never dropped).
-  await runSkeletonPass(store, projectRoot);
+  await runSkeletonPass(store, projectRoot, {
+    onActivity: opts.onActivity,
+    onThinking: opts.onThinking,
+  });
   const afterSkeleton = diffManifestOnDisk(projectRoot, store.snapshot());
   if (!afterSkeleton.complete) {
     throw new Error(
@@ -49,7 +66,10 @@ export async function executeProject(
   }
 
   // 4–5. Implementation pass + diff again.
-  await runImplementationPass(store, projectRoot, digest);
+  await runImplementationPass(store, projectRoot, digest, {
+    onActivity: opts.onActivity,
+    onThinking: opts.onThinking,
+  });
   const afterImplementation = diffManifestOnDisk(projectRoot, store.snapshot());
   if (!afterImplementation.complete) {
     throw new Error(

@@ -249,16 +249,40 @@ async function cmdRun(flags: Flags): Promise<void> {
     return;
   }
 
-  // EXECUTE
+  // EXECUTE — mid-execution terminal view (pitch-black, functional color only).
   const generatedRoot = resolve(config.generatedRoot);
   const projectRoot = join(generatedRoot, flags.project);
   mkdirSync(projectRoot, { recursive: true });
   const store = new ManifestStore(manifestPathFor(generatedRoot, flags.project), plan.manifest);
   writeFileSync(join(projectRoot, 'plan.json'), JSON.stringify(plan, null, 2) + '\n');
   console.log('\n--- EXECUTE (skeleton → digest → implementation) ---');
-  const { digest } = await executeProject(store, projectRoot);
+  console.log('Plan ✓ → Review ✓ → Approval ✓ → Execute ● → Debug ○ → Report ○');
+  const execEvents: Array<{
+    kind: 'read' | 'create' | 'edit';
+    path: string;
+    detail?: string;
+    added?: number;
+    removed?: number;
+    loc?: number;
+  }> = [];
+  const { formatActivityPlain } = await import('./tui/execution_view.js');
+  const { digest } = await executeProject(store, projectRoot, {
+    onActivity: (e) => {
+      execEvents.push({ ...e });
+      console.log(formatActivityPlain({ ...e }));
+    },
+  });
+  const { summarizeTotals } = await import('./tui/execution_view.js');
+  const totals = summarizeTotals(execEvents);
+  console.log(`TOTAL  ${totals.files} files changed  +${totals.added} -${totals.removed}`);
   const changedFiles = store.byStatus('implemented');
   console.log(`Implemented: ${changedFiles.join(', ')}`);
+  console.log('✓ Generate file manifest');
+  console.log(`✓ Skeleton pass — ${store.list().length} files`);
+  console.log(`◐ Implementation pass — ${changedFiles.length} of ${store.list().length} done`);
+  console.log('○ Run smoke tests');
+  console.log('○ Run regression tests');
+  console.log('○ Generate report');
 
   // DEBUG (+ capped self-loop repair)
   console.log('\n--- DEBUG ---');

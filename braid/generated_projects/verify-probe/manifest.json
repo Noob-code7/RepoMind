@@ -1,0 +1,25 @@
+{
+  "project": "verify-probe",
+  "files": [
+    {
+      "path": "src/app.ts",
+      "purpose": "core logic",
+      "expectedExports": [
+        "build"
+      ],
+      "dependencies": [],
+      "status": "planned"
+    },
+    {
+      "path": "src/index.ts",
+      "purpose": "entry point",
+      "expectedExports": [
+        "main"
+      ],
+      "dependencies": [
+        "src/app.ts"
+      ],
+      "status": "planned"
+    }
+  ]
+}

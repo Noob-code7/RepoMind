@@ -63,6 +63,16 @@ import {
 } from './layout.js';
 import { HOME_SUGGESTIONS, renderHome, renderPipelineLine } from './home.js';
 import { availableModels, labelForModel, shortForModel } from './models.js';
+import {
+  defaultExecuteTasks,
+  nowTs,
+  renderActivityFeed,
+  renderChecklist,
+  renderTabBar,
+  renderThinkingBadge,
+  renderTotalBar,
+  type ActivityEvent,
+} from './execution_view.js';
 
 const BRAID_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const HISTORY_FILE = join(homedir(), '.braid_history');
@@ -163,6 +173,10 @@ export class TuiApp {
   private suggestionIndex = 0;
   /** Tool messages render collapsed to one line; Ctrl+O expands. */
   private toolsExpanded = false;
+  /** Mid-execution terminal view: live activity feed + thinking badge. */
+  private execEvents: ActivityEvent[] = [];
+  private execThinking = false;
+  private execTotal = 0;
   private approval: {
     title: string;
     summary: string;
@@ -384,6 +398,34 @@ export class TuiApp {
     return true;
   }
 
+  /** True while the Execute stage owns the terminal (input muted). */
+  private isExecuting(): boolean {
+    return this.pipeline.execute === 'running';
+  }
+
+  /**
+   * Mid-execution panel lines (raw content width, no margin).
+   * Thinking badge (reasoning only) + activity feed + total bar + checklist.
+   */
+  private buildExecPanel(contentWidth: number): string[] {
+    if (!this.isExecuting() || this.execTotal <= 0) return [];
+    const out: string[] = [];
+    const badge = renderThinkingBadge(this.execThinking);
+    if (badge) out.push(badge);
+    out.push(`${C.faint}ACTIVITY — EXECUTE${C.reset}`);
+    for (const l of renderActivityFeed(this.execEvents, contentWidth, 6)) out.push(l);
+    out.push(renderTotalBar(this.execEvents, contentWidth));
+    const done = this.execEvents.filter((e) => e.kind !== 'read').length;
+    out.push(`${C.faint}TASKS${C.reset}`);
+    for (const l of renderChecklist(
+      defaultExecuteTasks(this.execTotal, done),
+      contentWidth,
+    )) {
+      out.push(l);
+    }
+    return out;
+  }
+
   /** True when a mouse row is inside the visible slash-menu box. */
   private isWheelInMenu(row: number): boolean {
     return (
@@ -426,6 +468,12 @@ export class TuiApp {
     const pipelineHeight = showPipelineLine ? 1 : 0;
     const detailLine = activeStageDetail(this.pipeline, this.busyLabel || undefined);
     const detailHeight = detailLine ? 1 : 0;
+    // Mid-execution terminal panel (mockup): thinking + feed + total + tasks.
+    // Computed early so its height participates in convHeight (row-exact).
+    const execPanel = this.buildExecPanel(L.contentWidth);
+    const execHeight = execPanel.length;
+    const execNoteHeight = this.isExecuting() ? 1 : 0;
+    const TAB_HEIGHT = 1;
     // Bordered input: top + up to 6 content rows + bottom. The box shares
     // the conversation's left edge (never centered independently).
     const inputLogical = this.buffer.split('\n');
@@ -450,9 +498,9 @@ export class TuiApp {
     const statusHeight = 1;
     const hintHeight = cols >= 70 ? 1 : 0;
     const chromeHeight =
-      pipelineHeight + detailHeight + approvalHeight +
+      TAB_HEIGHT + pipelineHeight + detailHeight + execHeight + approvalHeight +
       modeMenuHeight + menuHeight + modelMenuHeight +
-      inputBoxHeight + statusHeight + hintHeight + 1;
+      inputBoxHeight + execNoteHeight + statusHeight + hintHeight + 1;
     const convHeight = Math.max(4, rows - chromeHeight);
 
     // Build conversation — or the home empty-state (never both).
@@ -515,8 +563,9 @@ export class TuiApp {
     const start = Math.max(0, end - convHeight);
     const visible = conv.slice(start, end);
     // Resolve deferred home clicks to 1-based frame rows (scroll-aware).
+    // +1 for the persistent tab bar row above the conversation.
     for (const hc of homeClicks) {
-      const row = hc.idx - start + 1;
+      const row = hc.idx - start + 1 + TAB_HEIGHT;
       if (row >= 1 && row <= visible.length) this.registerClick(row, hc.c0, hc.c1, hc.fn);
     }
 
@@ -535,6 +584,9 @@ export class TuiApp {
       s += `\x1b[${r + 1};1H${fillRow}`;
     }
     s += '\x1b[H';
+    const chrome = (content: string): string => fitLine(M + content, cols - L.rightMargin);
+    // 1. Minimal tab bar (Problems · Output · Debug Console · Terminal active).
+    s += chrome(renderTabBar(L.contentWidth)) + '\n';
     s += visible.join('\n');
     if (visible.length < convHeight) s += '\n'.repeat(convHeight - visible.length);
     s += '\n';
@@ -542,7 +594,6 @@ export class TuiApp {
     // All chrome below shares the layout margin and is fitted inside both
     // margins — wrapped lines would silently shift rows and break the
     // absolute cursor placement at the end of render().
-    const chrome = (content: string): string => fitLine(M + content, cols - L.rightMargin);
     if (showPipelineLine && !this.showingHome()) {
       const pipeRow = s.split('\n').length;
       const dcol = L.margin - 2; // legacy segments assumed a 2-col indent
@@ -561,6 +612,8 @@ export class TuiApp {
     } else if (this.busy && busyBit) {
       s += chrome(`${C.muted}${busyBit.trim()}${C.reset}`) + '\n';
     }
+    // 2–5. Mid-execution panel: thinking badge + activity feed + total + tasks.
+    for (const l of execPanel) s += chrome(l) + '\n';
 
     if (this.approval) {
       const a = this.approval;
@@ -656,6 +709,10 @@ export class TuiApp {
     });
     const botFill = boxWidth - 2;
     s += `${pad}${C.faint}${BOX.bl}${BOX.h.repeat(botFill)}${BOX.br}${C.reset}\n`;
+    // 7. Muted/disabled note while Execute owns the terminal.
+    if (execNoteHeight) {
+      s += chrome(`${C.faint}Pipeline running — input available after Execute.${C.reset}`) + '\n';
+    }
 
     // Minimal status strip aligned with the input box: model · project · mode.
     const modelLabel = shortForModel(chatModel);
@@ -678,7 +735,7 @@ export class TuiApp {
     // frame coordinates derived from the layout (never relative moves from
     // wherever rendering happened to end). 1-based: text starts after the
     // margin, left border and one padding space.
-    const boxTopRow = rows - (inputBoxHeight + 1 + hintHeight) + 1;
+    const boxTopRow = rows - (inputBoxHeight + execNoteHeight + statusHeight + hintHeight) + 1;
     const cursorRow = boxTopRow + 1 + rowInWin;
     const cursorCol = L.margin + 3 + cursorAbs.visCol;
     process.stdout.write(`\x1b[${cursorRow};${cursorCol}H`);
@@ -903,6 +960,9 @@ export class TuiApp {
       if (this.mock) setMockManifest(store.snapshot());
       const total = store.list().length;
       this.setStage('execute', 'running');
+      this.execEvents = [];
+      this.execThinking = false;
+      this.execTotal = total;
       this.push('progress', `Executing **${this.project}** — ${total} file(s): skeleton → digest → implementation…`);
       // Poll manifest statuses for live progress without touching the executor.
       const pollTimer = setInterval(() => {
@@ -913,12 +973,29 @@ export class TuiApp {
         } catch { /* ignore */ }
       }, 400);
       try {
-        await this.withBusy(`building file 1/${total}`, () => executeProject(store, this.outDir()));
+        await this.withBusy(`building file 1/${total}`, () =>
+          executeProject(store, this.outDir(), {
+            onActivity: (e) => {
+              this.execEvents.push({ ...e, ts: nowTs() });
+              if (this.execEvents.length > 200) {
+                this.execEvents.splice(0, this.execEvents.length - 200);
+              }
+              const done = store.byStatus('implemented').length + store.byStatus('verified').length;
+              this.busyLabel = `building file ${Math.min(done + 1, total)}/${total}`;
+              this.render();
+            },
+            onThinking: (t) => {
+              this.execThinking = t;
+              this.render();
+            },
+          }),
+        );
       } finally {
         clearInterval(pollTimer);
       }
       this.checkCancel();
       const done = store.byStatus('implemented');
+      this.execThinking = false;
       this.setStage('execute', 'completed');
       this.push('assistant', `## Build complete\n\nImplemented (${done.length}/${total}):\n${done.map((f) => `- \`${f}\``).join('\n')}`, this.mode);
       this.persist();
