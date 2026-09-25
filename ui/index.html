@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Braid — Autonomous Multi-Model SDLC Orchestrator</title>
+  <meta name="description" content="Autonomous, multi-model SDLC agent with chunked two-pass generation, deterministic manifest enforcement, and human approval gates.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          },
+          colors: {
+            brand: {
+              50: '#f0f9ff',
+              500: '#06b6d4',
+              600: '#0891b2',
+              700: '#0e7490',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body {
+      font-family: 'Inter', sans-serif;
+      background-color: #030712;
+      color: #f3f4f6;
+    }
+    .glass-card {
+      background: rgba(17, 24, 39, 0.7);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .glow-cyan {
+      box-shadow: 0 0 25px -5px rgba(6, 182, 212, 0.3);
+    }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col antialiased selection:bg-cyan-500 selection:text-black">
+  <div id="root">
+    <!-- Standalone Dynamic UI Container -->
+    <header class="border-b border-slate-800/80 bg-slate-900/60 backdrop-blur-md sticky top-0 z-50 px-6 py-4 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-cyan-500 via-blue-600 to-indigo-600 flex items-center justify-center font-black text-white text-xl shadow-lg glow-cyan">
+          B
+        </div>
+        <div>
+          <h1 class="text-lg font-bold text-white tracking-tight flex items-center gap-2">
+            Braid <span class="text-xs px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-400 font-mono">v0.1.0</span>
+          </h1>
+          <p class="text-xs text-slate-400">
+            Autonomous Multi-Model SDLC Orchestrator &bull; Governed Lifecycle Agent
+          </p>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-4 text-xs font-mono">
+        <div class="bg-slate-900/80 px-3 py-1.5 rounded-lg border border-slate-800">
+          <span class="text-slate-500 mr-2">AGILE CYCLE:</span>
+          <span id="headerCycle" class="text-cyan-400 font-bold">#1</span>
+        </div>
+        <div class="bg-slate-900/80 px-3 py-1.5 rounded-lg border border-slate-800">
+          <span class="text-slate-500 mr-2">STAGE:</span>
+          <span id="headerState" class="text-emerald-400 font-bold uppercase">PLAN</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Pipeline Stepper Bar -->
+    <div class="bg-slate-900/40 border-b border-slate-800/80 px-6 py-3 overflow-x-auto">
+      <div class="flex items-center justify-between max-w-5xl mx-auto min-w-[700px]">
+        <div id="step-PLAN" class="flex items-center gap-2">
+          <div class="step-num w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold bg-cyan-500 text-slate-950 ring-4 ring-cyan-500/20 shadow-lg shadow-cyan-500/30">1</div>
+          <span class="text-xs font-bold text-cyan-400 tracking-wider">PLAN</span>
+          <span class="text-slate-700 mx-2">&rarr;</span>
+        </div>
+        <div id="step-REVIEW" class="flex items-center gap-2">
+          <div class="step-num w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold bg-slate-800 text-slate-500">2</div>
+          <span class="text-xs font-semibold text-slate-600 tracking-wider">REVIEW</span>
+          <span class="text-slate-700 mx-2">&rarr;</span>
+        </div>
+        <div id="step-GATE_REVIEW" class="flex items-center gap-2">
+          <div class="step-num w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold bg-slate-800 text-slate-500">3</div>
+          <span class="text-xs font-semibold text-slate-600 tracking-wider">GATE 1</span>
+          <span class="text-slate-700 mx-2">&rarr;</span>
+        </div>
+        <div id="step-EXECUTE" class="flex items-center gap-2">
+          <div class="step-num w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold bg-slate-800 text-slate-500">4</div>
+          <span class="text-xs font-semibold text-slate-600 tracking-wider">EXECUTE</span>
+          <span class="text-slate-700 mx-2">&rarr;</span>
+        </div>
+        <div id="step-DEBUG" class="flex items-center gap-2">
+          <div class="step-num w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold bg-slate-800 text-slate-500">5</div>
+          <span class="text-xs font-semibold text-slate-600 tracking-wider">DEBUG</span>
+          <span class="text-slate-700 mx-2">&rarr;</span>
+        </div>
+        <div id="step-REPORT" class="flex items-center gap-2">
+          <div class="step-num w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold bg-slate-800 text-slate-500">6</div>
+          <span class="text-xs font-semibold text-slate-600 tracking-wider">REPORT</span>
+          <span class="text-slate-700 mx-2">&rarr;</span>
+        </div>
+        <div id="step-GATE_REPORT" class="flex items-center gap-2">
+          <div class="step-num w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold bg-slate-800 text-slate-500">7</div>
+          <span class="text-xs font-semibold text-slate-600 tracking-wider">GATE 2</span>
+          <span class="text-slate-700 mx-2">&rarr;</span>
+        </div>
+        <div id="step-DONE" class="flex items-center gap-2">
+          <div class="step-num w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold bg-slate-800 text-slate-500">8</div>
+          <span class="text-xs font-semibold text-slate-600 tracking-wider">DONE</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Main Grid -->
+    <main class="flex-1 max-w-6xl w-full mx-auto p-6 grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div id="mainStageArea" class="lg:col-span-2 space-y-6">
+        <!-- Stage views rendered here via client JS -->
+      </div>
+
+      <!-- Live Stream Sidebar -->
+      <div class="space-y-4">
+        <div class="glass-card rounded-xl p-4 shadow-xl">
+          <div class="flex items-center justify-between mb-3 border-b border-slate-800 pb-2">
+            <h3 class="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-2">
+              <span class="w-2 h-2 rounded-full bg-cyan-400 animate-ping"></span>
+              Live Pipeline Stream
+            </h3>
+            <span class="text-[10px] text-cyan-400 font-mono">DETERMINISTIC</span>
+          </div>
+          <div id="logStream" class="space-y-2 max-h-[460px] overflow-y-auto font-mono text-xs pr-1">
+            <div class="p-2 rounded bg-slate-950/70 border border-slate-800 text-slate-500 text-center italic">
+              Ready to ingest PRD.
+            </div>
+          </div>
+        </div>
+
+        <div class="glass-card rounded-xl p-4 text-xs text-slate-400 space-y-2.5">
+          <div class="font-bold text-slate-200 uppercase tracking-wider text-[11px] flex items-center gap-2">
+            <span>🛡️</span> Architecture Guarantees
+          </div>
+          <ul class="space-y-1.5 list-disc list-inside text-slate-400 leading-relaxed">
+            <li><strong class="text-slate-300">Deterministic Control:</strong> Manifest & loop state owned by code, not LLMs.</li>
+            <li><strong class="text-slate-300">Zero Dropped Files:</strong> Manifest diff auto-requeues gaps.</li>
+            <li><strong class="text-slate-300">AST-Aware Patches:</strong> Never regenerates whole files on revision.</li>
+            <li><strong class="text-slate-300">Dual-Model Review:</strong> Independent critique model reduces blind spots.</li>
+            <li><strong class="text-slate-300">Deterministic Verification:</strong> Tested with real Vitest runner.</li>
+          </ul>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    // Browser interactive driver for live testing & visualization
+    const state = {
+      currentStage: 'PLAN',
+      agileCycle: 1,
+      project: 'sample_task_api',
+      plan: null,
+      review: null,
+      report: null
+    };
+
+    const logsContainer = document.getElementById('logStream');
+    function log(stage, msg) {
+      const time = new Date().toLocaleTimeString();
+      const div = document.createElement('div');
+      div.className = 'p-2 rounded bg-slate-950/80 border border-slate-800 text-[11px] leading-snug';
+      div.innerHTML = `<div class="flex justify-between text-[10px] text-slate-500 mb-0.5"><span class="text-cyan-400 font-bold">[${stage}]</span><span>${time}</span></div><div class="text-slate-300">${msg}</div>`;
+      logsContainer.prepend(div);
+    }
+
+    const stages = ['PLAN', 'REVIEW', 'GATE_REVIEW', 'EXECUTE', 'DEBUG', 'REPORT', 'GATE_REPORT', 'DONE'];
+
+    function updateStepper(activeStage) {
+      document.getElementById('headerState').innerText = activeStage;
+      document.getElementById('headerCycle').innerText = '#' + state.agileCycle;
+      const activeIdx = stages.indexOf(activeStage);
+
+      stages.forEach((st, idx) => {
+        const el = document.getElementById('step-' + st);
+        if (!el) return;
+        const num = el.querySelector('.step-num');
+        const text = el.querySelector('span');
+
+        if (idx === activeIdx) {
+          num.className = 'step-num w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold bg-cyan-500 text-slate-950 ring-4 ring-cyan-500/20 shadow-lg shadow-cyan-500/30';
+          num.innerText = idx + 1;
+          text.className = 'text-xs font-bold text-cyan-400 tracking-wider';
+        } else if (idx < activeIdx) {
+          num.className = 'step-num w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30';
+          num.innerText = '✓';
+          text.className = 'text-xs font-semibold text-slate-300 tracking-wider';
+        } else {
+          num.className = 'step-num w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold bg-slate-800 text-slate-500';
+          num.innerText = idx + 1;
+          text.className = 'text-xs font-semibold text-slate-600 tracking-wider';
+        }
+      });
+    }
+
+    function renderStage() {
+      const area = document.getElementById('mainStageArea');
+      updateStepper(state.currentStage);
+
+      if (state.currentStage === 'PLAN') {
+        area.innerHTML = `
+          <div class="glass-card p-6 rounded-xl shadow-xl space-y-4">
+            <div class="flex items-center justify-between">
+              <div>
+                <h2 class="text-xl font-bold text-white flex items-center gap-2">
+                  <span class="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse"></span>
+                  1. PRD Ingestion & Planning Engine
+                </h2>
+                <p class="text-xs text-slate-400 mt-1">Accepts freeform or template PRD & generates Task Graph, File Manifest & Test Stubs.</p>
+              </div>
+              <button onclick="loadDemoPRD()" class="px-3 py-1.5 text-xs bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-slate-700 rounded-lg">
+                Load Task API PRD
+              </button>
+            </div>
+            <div>
+              <label class="block text-xs font-semibold text-slate-300 uppercase mb-1">Project Slug Name</label>
+              <input id="projNameInput" type="text" value="${state.project}" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs font-mono text-slate-200">
+            </div>
+            <div>
+              <label class="block text-xs font-semibold text-slate-300 uppercase mb-1">Product Requirements Document (PRD)</label>
+              <textarea id="prdArea" rows="8" class="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-xs font-mono text-slate-200 leading-relaxed"># Task API PRD\n1. User Authentication (JWT sign/verify)\n2. Task Repository (In-memory CRUD)\n3. Unit tests with Vitest stubs</textarea>
+            </div>
+            <button onclick="runPlanStage()" id="runPlanBtn" class="w-full py-3 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-bold text-sm rounded-lg shadow-lg glow-cyan transition">
+              Run Autonomous Planning Stage &rarr;
+            </button>
+          </div>
+        `;
+      } else if (state.currentStage === 'REVIEW') {
+        area.innerHTML = `
+          <div class="glass-card p-12 rounded-xl text-center space-y-4">
+            <div class="w-12 h-12 border-4 border-cyan-500/20 border-t-cyan-400 rounded-full animate-spin mx-auto"></div>
+            <h3 class="text-lg font-bold text-white">Reviewer Model Critiquing Plan...</h3>
+            <p class="text-xs text-slate-400 max-w-md mx-auto">Evaluating architectural feasibility, dependency cycles, and missing edge cases using an independent model.</p>
+          </div>
+        `;
+      } else if (state.currentStage === 'GATE_REVIEW') {
+        const fileList = state.plan.manifest.files.map(f => `<div class="flex justify-between text-xs py-1 border-b border-slate-800/50"><span class="text-cyan-400 font-mono">${f.path}</span><span class="text-slate-500">${f.purpose}</span></div>`).join('');
+        const critList = state.review.critiques.map(c => `<li>${c}</li>`).join('');
+        const riskList = state.review.risks.map(r => `<li>${r}</li>`).join('');
+
+        area.innerHTML = `
+          <div class="glass-card p-6 rounded-xl border border-indigo-500/40 shadow-2xl space-y-5">
+            <div class="flex justify-between items-center border-b border-slate-800 pb-3">
+              <div>
+                <span class="px-2.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-xs font-bold uppercase">Human Gate 1</span>
+                <h3 class="text-lg font-bold text-white mt-1">Pre-Execution Architectural Sign-Off</h3>
+              </div>
+              <div class="px-3 py-1 rounded-lg border border-emerald-500/30 bg-emerald-500/10 text-emerald-400 font-mono text-xs">
+                Risk Score: ${(state.review.riskScore * 100).toFixed(0)}%
+              </div>
+            </div>
+
+            <div class="bg-slate-950 p-3 rounded-lg border border-slate-800">
+              <div class="text-xs font-semibold text-slate-400 uppercase mb-2">Planned Manifest (${state.plan.manifest.files.length} files)</div>
+              <div class="max-h-36 overflow-y-auto pr-1">${fileList}</div>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+              <div class="bg-slate-950 p-3 rounded-lg border border-slate-800">
+                <div class="text-amber-400 font-bold mb-1">Architectural Critiques</div>
+                <ul class="list-disc list-inside text-slate-300 space-y-1">${critList}</ul>
+              </div>
+              <div class="bg-slate-950 p-3 rounded-lg border border-slate-800">
+                <div class="text-rose-400 font-bold mb-1">Flagged Risks</div>
+                <ul class="list-disc list-inside text-slate-300 space-y-1">${riskList}</ul>
+              </div>
+            </div>
+
+            <div class="flex gap-3 pt-2">
+              <button onclick="approveGateReview()" class="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-lg shadow-lg transition">
+                ✓ Approve Plan & Execute Skeletons
+              </button>
+              <button onclick="rejectGateReview()" class="px-4 py-2.5 bg-slate-800 hover:bg-amber-500/20 border border-slate-700 text-amber-300 text-xs font-bold rounded-lg transition">
+                ↺ Request Revisions
+              </button>
+            </div>
+          </div>
+        `;
+      } else if (state.currentStage === 'EXECUTE') {
+        area.innerHTML = `
+          <div class="glass-card p-12 rounded-xl text-center space-y-4">
+            <div class="w-12 h-12 border-4 border-indigo-500/20 border-t-indigo-400 rounded-full animate-spin mx-auto"></div>
+            <h3 class="text-lg font-bold text-white">Running Chunked Two-Pass Execution...</h3>
+            <p class="text-xs text-slate-400 max-w-md mx-auto">
+              Skeleton pass &rarr; Manifest diff verification &rarr; Digest interface build &rarr; Implementation pass fed by digest & direct dependencies.
+            </p>
+          </div>
+        `;
+      } else if (state.currentStage === 'DEBUG') {
+        area.innerHTML = `
+          <div class="glass-card p-12 rounded-xl text-center space-y-4">
+            <div class="w-12 h-12 border-4 border-amber-500/20 border-t-amber-400 rounded-full animate-spin mx-auto"></div>
+            <h3 class="text-lg font-bold text-white">Running Deterministic Test Harness...</h3>
+            <p class="text-xs text-slate-400 max-w-md mx-auto">
+              Running Vitest test runner on smoke tests and stub specifications. Self-loop triage active.
+            </p>
+          </div>
+        `;
+      } else if (state.currentStage === 'REPORT' || state.currentStage === 'GATE_REPORT' || state.currentStage === 'DONE') {
+        const rows = state.report.prdCoverage.map(c => `
+          <tr class="border-b border-slate-800/60">
+            <td class="px-3 py-2 text-slate-200">${c.requirement}</td>
+            <td class="px-3 py-2"><span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">${c.status}</span></td>
+            <td class="px-3 py-2 font-mono text-cyan-400 text-[11px]">${c.files.join(', ')}</td>
+          </tr>
+        `).join('');
+
+        area.innerHTML = `
+          <div class="space-y-5">
+            <div class="glass-card p-6 rounded-xl space-y-5">
+              <div class="flex justify-between items-center border-b border-slate-800 pb-3">
+                <div>
+                  <h3 class="text-lg font-bold text-white flex items-center gap-2">
+                    <span class="w-2.5 h-2.5 rounded-full bg-emerald-400"></span>
+                    Verified Cycle Report
+                  </h3>
+                  <p class="text-xs text-slate-400">Deterministic metrics from test runner & manifest diff.</p>
+                </div>
+                <div class="flex gap-4 text-right">
+                  <div>
+                    <div class="text-[10px] font-bold text-slate-500 uppercase">Completeness</div>
+                    <div class="text-xl font-bold font-mono text-emerald-400">${state.report.manifestCompleteness}%</div>
+                  </div>
+                  <div>
+                    <div class="text-[10px] font-bold text-slate-500 uppercase">Stub Tests</div>
+                    <div class="text-xl font-bold font-mono text-cyan-400">${state.report.testResults.stubs.passed} Passing</div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="bg-slate-950 p-3 rounded-lg border border-slate-800">
+                <div class="text-xs font-semibold text-slate-400 uppercase mb-1">Diff Summary</div>
+                <div class="text-xs text-slate-300 font-mono">${state.report.diffSummary}</div>
+              </div>
+
+              <div>
+                <div class="text-xs font-semibold text-slate-400 uppercase mb-2">PRD Coverage Matrix</div>
+                <div class="overflow-x-auto border border-slate-800 rounded-lg">
+                  <table class="w-full text-left text-xs">
+                    <thead class="bg-slate-950 text-slate-400 uppercase border-b border-slate-800">
+                      <tr><th class="px-3 py-2">Requirement</th><th class="px-3 py-2">Status</th><th class="px-3 py-2">Manifest Files</th></tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-800/40 bg-slate-900/60">${rows}</tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+
+            ${state.currentStage === 'GATE_REPORT' ? `
+              <div class="glass-card p-6 rounded-xl border border-indigo-500/40 shadow-xl space-y-4">
+                <div class="flex justify-between items-center">
+                  <div>
+                    <span class="px-2.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-xs font-bold uppercase">Human Gate 2</span>
+                    <h3 class="text-lg font-bold text-white mt-1">Cycle Satisfaction Checkpoint</h3>
+                  </div>
+                </div>
+                <p class="text-xs text-slate-300">Are you satisfied with this cycle's code generation, or do you want an agile iteration?</p>
+                <div class="flex gap-3">
+                  <button onclick="approveGateReport()" class="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-lg shadow-lg transition">
+                    ✓ Satisfied & Finish Build
+                  </button>
+                  <button onclick="rejectGateReport()" class="px-4 py-2.5 bg-slate-800 hover:bg-amber-500/20 border border-slate-700 text-amber-300 text-xs font-bold rounded-lg transition">
+                    ↺ Request Agile Loop Iteration
+                  </button>
+                </div>
+              </div>
+            ` : ''}
+
+            ${state.currentStage === 'DONE' ? `
+              <div class="p-6 bg-emerald-950/20 border border-emerald-500/30 rounded-xl text-center space-y-3">
+                <div class="text-3xl">🎉</div>
+                <h3 class="text-lg font-bold text-emerald-400">Autonomous SDLC Build Completed Successfully!</h3>
+                <p class="text-xs text-slate-300">100% manifest completeness & zero dropped logic.</p>
+                <button onclick="restart()" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-lg transition">
+                  Build Another Project
+                </button>
+              </div>
+            ` : ''}
+          </div>
+        `;
+      }
+    }
+
+    function loadDemoPRD() {
+      document.getElementById('prdArea').value = `# Task Management API PRD
+## Requirements
+1. Authentication: User registration & JWT login.
+2. Tasks: In-memory store with create, list, and complete functions.
+3. Verification: Complete Vitest unit test suite.`;
+    }
+
+    function runPlanStage() {
+      state.project = document.getElementById('projNameInput').value;
+      log('PLAN', 'Ingesting PRD for project: ' + state.project);
+      state.currentStage = 'REVIEW';
+      renderStage();
+
+      setTimeout(() => {
+        state.plan = {
+          manifest: {
+            project: state.project,
+            files: [
+              { path: 'src/auth/token.ts', purpose: 'JWT signing & verification', expectedExports: ['signToken', 'verifyToken'] },
+              { path: 'src/auth/service.ts', purpose: 'User authentication logic', expectedExports: ['AuthService'] },
+              { path: 'src/tasks/repository.ts', purpose: 'In-memory task storage', expectedExports: ['TaskRepository'] },
+              { path: 'src/tasks/controller.ts', purpose: 'Task routing & handlers', expectedExports: ['TaskController'] },
+              { path: 'src/server.ts', purpose: 'Application entrypoint', expectedExports: ['startServer'] }
+            ]
+          },
+          testStubs: [
+            { file: 'tests/auth.test.ts', name: 'verifies token signing' },
+            { file: 'tests/tasks.test.ts', name: 'verifies task CRUD' }
+          ]
+        };
+
+        state.review = {
+          critiques: ['Add UUID validation for task identifiers', 'Include bcrypt password hashing'],
+          risks: ['In-memory store will reset on server restart'],
+          riskScore: 0.15
+        };
+
+        log('REVIEW', 'Reviewer emitted critique with 15% risk score.');
+        state.currentStage = 'GATE_REVIEW';
+        renderStage();
+      }, 900);
+    }
+
+    function approveGateReview() {
+      log('GATE 1', 'Human approved plan.');
+      state.currentStage = 'EXECUTE';
+      renderStage();
+
+      setTimeout(() => {
+        log('EXECUTE', 'Pass 1 (Skeleton): 5/5 files written.');
+        log('EXECUTE', 'Deterministic Manifest Diff: 100% complete.');
+        log('EXECUTE', 'Condensed digest index built.');
+        log('EXECUTE', 'Pass 2 (Implementation): 5/5 files filled.');
+        state.currentStage = 'DEBUG';
+        renderStage();
+
+        setTimeout(() => {
+          log('DEBUG', 'Deterministic test runner: 5 smoke tests passed, 2 stub tests passed.');
+          state.report = {
+            manifestCompleteness: 100,
+            testResults: {
+              smoke: { passed: 5, failed: 0 },
+              regression: { passed: 0, failed: 0 },
+              stubs: { passed: 2, failed: 0 }
+            },
+            diffSummary: 'Generated 5 TypeScript source files with JWT auth and in-memory CRUD operations.',
+            flaggedRisks: [],
+            prdCoverage: [
+              { requirement: 'User Authentication (JWT)', status: 'implemented', files: ['src/auth/token.ts', 'src/auth/service.ts'] },
+              { requirement: 'Task CRUD Operations', status: 'implemented', files: ['src/tasks/repository.ts', 'src/tasks/controller.ts'] },
+              { requirement: 'Application Entrypoint', status: 'implemented', files: ['src/server.ts'] }
+            ]
+          };
+
+          state.currentStage = 'GATE_REPORT';
+          renderStage();
+        }, 800);
+      }, 1000);
+    }
+
+    function rejectGateReview() {
+      log('GATE 1', 'Human requested plan revisions.');
+      state.currentStage = 'PLAN';
+      renderStage();
+    }
+
+    function approveGateReport() {
+      log('GATE 2', 'Human approved cycle report.');
+      state.currentStage = 'DONE';
+      renderStage();
+    }
+
+    function rejectGateReport() {
+      state.agileCycle++;
+      log('AGILE LOOP', 'Triggering Agile Cycle #' + state.agileCycle + ' with new feedback.');
+      state.currentStage = 'PLAN';
+      renderStage();
+    }
+
+    function restart() {
+      state.currentStage = 'PLAN';
+      renderStage();
+    }
+
+    // Initial render
+    renderStage();
+  </script>
+</body>
+</html>

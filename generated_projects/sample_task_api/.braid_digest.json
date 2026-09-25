@@ -1,0 +1,23 @@
+[
+  {
+    "path": "src/auth.ts",
+    "signatures": [
+      "export function createToken(userId: string): string;"
+    ],
+    "docstring": "JWT auth utilities"
+  },
+  {
+    "path": "src/tasks.ts",
+    "signatures": [
+      "export function createToken(userId: string): string;"
+    ],
+    "docstring": "In-memory task CRUD repository"
+  },
+  {
+    "path": "src/index.ts",
+    "signatures": [
+      "export function createToken(userId: string): string;"
+    ],
+    "docstring": "Application bootstrap"
+  }
+]

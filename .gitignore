@@ -1,0 +1,22 @@
+# Node dependencies
+node_modules/
+braid/node_modules/
+
+# Environment files
+.env
+.env.local
+*.env
+
+# Build outputs
+dist/
+braid/dist/
+build/
+*.tsbuildinfo
+
+# Generated projects
+braid/generated_projects/*
+!braid/generated_projects/.gitkeep
+
+# Logs & temp
+*.log
+.DS_Store

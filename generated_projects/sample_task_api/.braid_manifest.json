@@ -1,0 +1,36 @@
+{
+  "project": "sample_task_api",
+  "files": [
+    {
+      "path": "src/auth.ts",
+      "purpose": "JWT auth utilities",
+      "expectedExports": [
+        "createToken"
+      ],
+      "dependencies": [],
+      "status": "implemented"
+    },
+    {
+      "path": "src/tasks.ts",
+      "purpose": "In-memory task CRUD repository",
+      "expectedExports": [
+        "TaskStore"
+      ],
+      "dependencies": [
+        "src/auth.ts"
+      ],
+      "status": "implemented"
+    },
+    {
+      "path": "src/index.ts",
+      "purpose": "Application bootstrap",
+      "expectedExports": [
+        "startApp"
+      ],
+      "dependencies": [
+        "src/tasks.ts"
+      ],
+      "status": "implemented"
+    }
+  ]
+}
