@@ -13,6 +13,47 @@ import {
 } from '../shared/types.js';
 
 export class DigestStore {
+  private entries = new Map<string, DigestEntry>();
+
+  constructor(initial: CodebaseDigest = []) {
+    for (const e of initial) {
+      this.entries.set(e.path, { ...e });
+    }
+  }
+
+  upsert(filePath: string, source: string, docstringFallback = ''): DigestEntry {
+    const signatures = DigestStore.extractSignatures(source);
+    const docstring = DigestStore.extractDocstring(source) || docstringFallback;
+    const entry: DigestEntry = {
+      path: filePath,
+      signatures,
+      docstring,
+    };
+    this.entries.set(filePath, entry);
+    return entry;
+  }
+
+  upsertEntry(entry: DigestEntry): void {
+    this.entries.set(entry.path, { ...entry });
+  }
+
+  remove(filePath: string): void {
+    this.entries.delete(filePath);
+  }
+
+  get(filePath: string): DigestEntry | undefined {
+    const e = this.entries.get(filePath);
+    return e ? { ...e } : undefined;
+  }
+
+  list(): CodebaseDigest {
+    return [...this.entries.values()];
+  }
+
+  toPrompt(): string {
+    return DigestStore.formatForPrompt(this.list());
+  }
+
   static digestPath(projectRoot: string): string {
     return path.join(projectRoot, '.braid_digest.json');
   }
@@ -65,56 +106,47 @@ export class DigestStore {
   }
 
   /**
-   * Extract top-level file docstring or return fallback purpose.
+   * Extract top-level docstring or comment describing file purpose.
    */
-  static extractDocstring(source: string, fallback: string): string {
-    const trimmed = source.trim();
-    if (trimmed.startsWith('/**')) {
-      const end = trimmed.indexOf('*/');
-      if (end !== -1) {
-        return trimmed
-          .slice(0, end + 2)
-          .replace(/\/\*\*|\*\/|\*/g, '')
-          .split('\n')
-          .map((s) => s.trim())
-          .filter(Boolean)
-          .join(' ');
-      }
+  static extractDocstring(source: string): string {
+    const match = source.match(/\/\*\*([\s\S]*?)\*\//);
+    if (match && match[1]) {
+      return match[1]
+        .split('\n')
+        .map((l) => l.replace(/^\s*\*\s?/, '').trim())
+        .filter((l) => l.length > 0)
+        .join(' ');
     }
-    return fallback;
+    const lineComments = source
+      .split('\n')
+      .filter((l) => l.trim().startsWith('//'))
+      .map((l) => l.trim().replace(/^\/\/\s*/, ''))
+      .join(' ');
+    return lineComments;
   }
 
   /**
-   * Build complete digest from disk files mapped by manifest.
+   * Build complete CodebaseDigest from project root and manifest.
    */
   static build(projectRoot: string, manifest: FileManifest): CodebaseDigest {
     const digest: CodebaseDigest = [];
 
     for (const entry of manifest.files) {
       const fullPath = path.join(projectRoot, entry.path);
-      if (!fs.existsSync(fullPath)) {
-        digest.push({
-          path: entry.path,
-          signatures: entry.expectedExports.map((exp) => `export (planned) ${exp};`),
-          docstring: entry.purpose,
-        });
-        continue;
-      }
-
-      try {
+      if (fs.existsSync(fullPath)) {
         const source = fs.readFileSync(fullPath, 'utf-8');
         const signatures = DigestStore.extractSignatures(source);
-        const docstring = DigestStore.extractDocstring(source, entry.purpose);
+        let docstring = DigestStore.extractDocstring(source);
+        if (!docstring) {
+          docstring = entry.purpose;
+        }
 
         digest.push({
           path: entry.path,
-          signatures:
-            signatures.length > 0
-              ? signatures
-              : entry.expectedExports.map((e) => `export ${e};`),
-          docstring: docstring || entry.purpose,
+          signatures: signatures.length > 0 ? signatures : entry.expectedExports.map((e) => `export ${e};`),
+          docstring,
         });
-      } catch {
+      } else {
         digest.push({
           path: entry.path,
           signatures: entry.expectedExports.map((e) => `export ${e};`),

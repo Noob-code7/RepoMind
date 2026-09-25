@@ -77,3 +77,24 @@ Output JSON matching:
 
   return { proposals, appliedCount };
 }
+
+export interface TriageRequest {
+  failures: string;
+  digestPrompt: string;
+  sources: Array<{ path: string; source: string }>;
+  allowedPaths: string[];
+}
+
+export async function triageFailures(
+  req: TriageRequest,
+): Promise<PatchProposal[]> {
+  const userPrompt = `FAILURES:\n${req.failures}\n\nDIGEST:\n${req.digestPrompt}\n\nFAILING SOURCES:\n${req.sources.map((s) => `--- ${s.path} ---\n${s.source}`).join('\n\n')}\n\nPropose targeted patches.`;
+  const triage = await completeJson<TriageOutput>({
+    stage: 'triage',
+    systemPrompt: 'You are the Braid Failure Triage Engine. Propose TARGETED patches to fix the issue. Output JSON matching { summary, patches: [{ path, anchor, replacement, reason }] }',
+    userPrompt,
+    maxTokens: 4000,
+  });
+  const patches = Array.isArray(triage.patches) ? triage.patches : [];
+  return patches.filter((p) => req.allowedPaths.includes(p.path));
+}

@@ -98,3 +98,36 @@ export async function runImplementationPass(
 
   return implemented;
 }
+
+export function validateImplementation(
+  entry: FileManifestEntry,
+  code: string,
+): void {
+  const trimmed = code.trim();
+  if (!trimmed) {
+    throw new Error(`[implementation_pass] Empty output for ${entry.path}`);
+  }
+  if (trimmed.startsWith('{')) {
+    let parsed: unknown = null;
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      parsed = null;
+    }
+    if (
+      typeof parsed === 'object' &&
+      parsed !== null &&
+      Array.isArray((parsed as Record<string, unknown>)['files'])
+    ) {
+      throw new Error(
+        `[implementation_pass] Protocol echo for ${entry.path}: got the skeleton JSON envelope, not source`,
+      );
+    }
+  }
+  const missing = entry.expectedExports.filter((sym) => !code.includes(sym));
+  if (missing.length > 0) {
+    throw new Error(
+      `[implementation_pass] ${entry.path} dropped expected exports: ${missing.join(', ')}`,
+    );
+  }
+}

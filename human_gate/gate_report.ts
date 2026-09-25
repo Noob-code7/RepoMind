@@ -3,8 +3,8 @@
  * Gate 2: Human satisfaction gate after the Cycle Report.
  * Human can approve (completes the build) or request changes (triggers an agile loop back to PLAN).
  */
-import readline from 'node:readline';
-import { CycleReport, GateDecision } from '../shared/types.js';
+import { createInterface } from 'node:readline';
+import type { CycleReport, GateDecision, TestResults } from '../shared/types.js';
 
 export type GateReportHandler = (report: CycleReport) => Promise<GateDecision> | GateDecision;
 
@@ -14,9 +14,45 @@ export function setGateReportHandler(handler: GateReportHandler | null): void {
   customReportGateHandler = handler;
 }
 
-export async function promptGateReport(report: CycleReport): Promise<GateDecision> {
-  if (customReportGateHandler) {
-    return await customReportGateHandler(report);
+export function decideGateReport(
+  approved: boolean,
+  feedback?: string,
+): GateDecision {
+  if (!approved && (!feedback || feedback.trim().length === 0)) {
+    throw new Error('[gate_report] feedback is required when rejecting the report');
+  }
+  return approved
+    ? { approved: true }
+    : { approved: false, feedback: feedback!.trim() };
+}
+
+function totalPassed(t: TestResults): number {
+  return t.smoke.passed + t.regression.passed + t.stubs.passed;
+}
+function totalFailed(t: TestResults): number {
+  return t.smoke.failed + t.regression.failed + t.stubs.failed;
+}
+
+export function formatReportSummary(report: CycleReport): string {
+  const t = report.testResults;
+  return [
+    `Manifest completeness: ${report.manifestCompleteness.toFixed(1)}%`,
+    `Tests: ${totalPassed(t)} passed / ${totalFailed(t)} failed (smoke ${t.smoke.passed}/${t.smoke.failed}, regression ${t.regression.passed}/${t.regression.failed}, stubs ${t.stubs.passed}/${t.stubs.failed})`,
+    `Diff: ${report.diffSummary}`,
+    `Risks (${report.flaggedRisks.length}):`,
+    ...report.flaggedRisks.map((r) => `  ! ${r}`),
+    `PRD coverage:`,
+    ...report.prdCoverage.map((c) => `  [${c.status}] ${c.requirement} → ${c.files.join(', ') || '—'}`),
+  ].join('\n');
+}
+
+export async function promptGateReport(
+  summaryOrReport: string | CycleReport,
+): Promise<GateDecision> {
+  if (typeof summaryOrReport !== 'string') {
+    if (customReportGateHandler) {
+      return await customReportGateHandler(summaryOrReport);
+    }
   }
 
   // Non-interactive fallback
@@ -25,48 +61,22 @@ export async function promptGateReport(report: CycleReport): Promise<GateDecisio
     return { approved: true };
   }
 
-  // Interactive CLI prompt
-  console.log('\n================== HUMAN GATE: REPORT SATISFACTION ==================');
-  console.log(`Manifest Completeness: ${report.manifestCompleteness}%`);
-  console.log('Test Results:');
-  console.log(`  - Smoke: ${report.testResults.smoke.passed} passed, ${report.testResults.smoke.failed} failed`);
-  console.log(`  - Regression: ${report.testResults.regression.passed} passed, ${report.testResults.regression.failed} failed`);
-  console.log(`  - Stubs: ${report.testResults.stubs.passed} passed, ${report.testResults.stubs.failed} failed`);
-  console.log(`\nDiff Summary:\n${report.diffSummary}\n`);
+  const summary = typeof summaryOrReport === 'string'
+    ? summaryOrReport
+    : formatReportSummary(summaryOrReport);
 
-  if (report.prdCoverage.length > 0) {
-    console.log('PRD Coverage:');
-    for (const cov of report.prdCoverage) {
-      console.log(`  [${cov.status.toUpperCase()}] ${cov.requirement} (files: ${cov.files.join(', ')})`);
+  console.log('\n=== GATE 2: Satisfaction ===\n' + summary + '\n');
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const ask = (q: string): Promise<string> =>
+    new Promise((resolve) => rl.question(q, resolve));
+  try {
+    const answer = (await ask('Satisfied? [y/N]: ')).trim().toLowerCase();
+    if (answer === 'y' || answer === 'yes') {
+      return { approved: true };
     }
+    const feedback = (await ask('What must change (required): ')).trim();
+    return decideGateReport(false, feedback);
+  } finally {
+    rl.close();
   }
-
-  if (report.flaggedRisks.length > 0) {
-    console.log('\nFlagged Risks:');
-    report.flaggedRisks.forEach((r) => console.log(`  ! ${r}`));
-  }
-  console.log('====================================================================\n');
-
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-
-  return new Promise<GateDecision>((resolve) => {
-    rl.question('Are you satisfied with the generated project? (y/n): ', (ans) => {
-      const lower = ans.trim().toLowerCase();
-      if (lower === 'y' || lower === 'yes') {
-        rl.close();
-        resolve({ approved: true });
-      } else {
-        rl.question(
-          'Please describe what changes/fixes you want in the next agile cycle: ',
-          (feedback) => {
-            rl.close();
-            resolve({ approved: false, feedback: feedback.trim() });
-          },
-        );
-      }
-    });
-  });
 }

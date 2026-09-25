@@ -37,8 +37,29 @@ export function hasMockHandler(): boolean {
   return mockHandler !== null;
 }
 
+/**
+ * Runtime per-stage model overrides (REPL /model command). Values must be
+ * model names; provider routing still follows the claude-* prefix rule.
+ */
+const modelOverrides = new Map<LlmStage, string>();
+
+export function setModelOverride(stage: LlmStage, model: string): void {
+  if (!model.trim()) throw new Error('[llm_client] model name is required');
+  modelOverrides.set(stage, model.trim());
+}
+export function clearModelOverride(stage: LlmStage): void {
+  modelOverrides.delete(stage);
+}
+export function clearAllModelOverrides(): void {
+  modelOverrides.clear();
+}
+/** Effective model for a stage: runtime override wins, else env config. */
+export function effectiveModel(stage: LlmStage): string {
+  return modelOverrides.get(stage) ?? MODEL_FOR[stage]();
+}
+
 function modelFor(req: LlmRequest): string {
-  return MODEL_FOR[req.stage]();
+  return effectiveModel(req.stage);
 }
 
 function isClaude(model: string): boolean {
@@ -57,13 +78,75 @@ function requireKey(stage: LlmStage): string {
   return key;
 }
 
-let openaiCache: { key: string; client: OpenAI } | null = null;
+interface ProviderConfig {
+  baseURL?: string;
+  defaultHeaders?: Record<string, string>;
+}
+
+function resolveProvider(model: string, key: string): ProviderConfig {
+  // 1. OpenRouter (Nemotron models or OpenRouter keys)
+  if (
+    key.startsWith('sk-or-v1-') ||
+    model.includes('/') ||
+    model.toLowerCase().includes('nemotron')
+  ) {
+    return {
+      baseURL: process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1',
+      defaultHeaders: {
+        'HTTP-Referer': 'https://github.com/braid',
+        'X-Title': 'Braid',
+      },
+    };
+  }
+
+  // 2. DeepSeek
+  if (
+    model.toLowerCase().startsWith('deepseek') ||
+    key === process.env.DEEPSEEK_API_KEY
+  ) {
+    return {
+      baseURL: process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com',
+    };
+  }
+
+  // 3. Google Gemini (via OpenAI-compatible endpoint)
+  if (
+    model.toLowerCase().startsWith('gemini') ||
+    key.startsWith('AQ.') ||
+    key === process.env.GEMINI_API_KEY
+  ) {
+    return {
+      baseURL:
+        process.env.GEMINI_BASE_URL ||
+        'https://generativelanguage.googleapis.com/v1beta/openai/',
+    };
+  }
+
+  // 4. Default OpenAI
+  return {
+    baseURL: process.env.OPENAI_BASE_URL || undefined,
+  };
+}
+
+const openaiClients = new Map<string, OpenAI>();
 let anthropicCache: { key: string; client: Anthropic } | null = null;
 
-function openai(key: string): OpenAI {
-  if (!openaiCache || openaiCache.key !== key)
-    openaiCache = { key, client: new OpenAI({ apiKey: key }) };
-  return openaiCache.client;
+function getOpenAIClient(
+  key: string,
+  baseURL?: string,
+  defaultHeaders?: Record<string, string>,
+): OpenAI {
+  const cacheKey = `${key}::${baseURL ?? 'default'}`;
+  let client = openaiClients.get(cacheKey);
+  if (!client) {
+    client = new OpenAI({
+      apiKey: key,
+      baseURL: baseURL || undefined,
+      defaultHeaders,
+    });
+    openaiClients.set(cacheKey, client);
+  }
+  return client;
 }
 
 function anthropic(key: string): Anthropic {
@@ -89,15 +172,25 @@ export async function complete(req: LlmRequest): Promise<string> {
     if (!block || block.type !== 'text') throw new Error('[llm_client] Empty Anthropic response');
     return block.text;
   }
-  const res = await openai(key).chat.completions.create({
+
+  const provider = resolveProvider(model, key);
+  const client = getOpenAIClient(key, provider.baseURL, provider.defaultHeaders);
+
+  const params: OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming = {
     model,
-    temperature: req.temperature ?? 0.2,
-    max_tokens: req.maxTokens ?? 4096,
     messages: [
       { role: 'system', content: req.systemPrompt },
       { role: 'user', content: req.userPrompt },
     ],
-  });
+    max_tokens: req.maxTokens ?? 4096,
+  };
+
+  // DeepSeek-reasoner does not support custom temperature
+  if (model !== 'deepseek-reasoner') {
+    params.temperature = req.temperature ?? 0.2;
+  }
+
+  const res = await client.chat.completions.create(params);
   return res.choices[0]?.message?.content ?? '';
 }
 

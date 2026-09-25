@@ -173,3 +173,26 @@ export class AstPatcher {
     return false;
   }
 }
+
+export function patchSource(
+  source: string,
+  anchor: string,
+  replacement: string,
+): string {
+  const res = AstPatcher.patch(source, { path: '', anchor, replacement, reason: '' });
+  if (res.success) {
+    return res.patched;
+  }
+  throw new Error(`[ast_patcher] Anchor not found: ${anchor}`);
+}
+
+export function applyPatch(
+  filePath: string,
+  anchor: string,
+  replacement: string,
+): string {
+  const source = fs.readFileSync(filePath, 'utf8');
+  const next = patchSource(source, anchor, replacement);
+  fs.writeFileSync(filePath, next, 'utf8');
+  return next;
+}

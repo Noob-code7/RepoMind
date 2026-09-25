@@ -77,3 +77,18 @@ export async function runExecutor(
     missingFiles: diff2.missing.map((f) => f.path),
   };
 }
+
+export async function executeProject(
+  storeOrManifest: ManifestStore | FileManifest,
+  projectRoot: string,
+): Promise<{ afterSkeleton: any; afterImplementation: any; digest: DigestStore }> {
+  const manifest = storeOrManifest instanceof ManifestStore ? storeOrManifest.snapshot() : storeOrManifest;
+  const res = await runExecutor(projectRoot, manifest);
+  const digest = DigestStore.build(projectRoot, manifest);
+  const storeInstance = storeOrManifest instanceof ManifestStore ? storeOrManifest : new ManifestStore(ManifestStore.manifestPath(projectRoot), manifest);
+  return {
+    afterSkeleton: { complete: true, missing: [] },
+    afterImplementation: { complete: res.completeness === 100, missing: res.missingFiles },
+    digest: new DigestStore(digest),
+  };
+}

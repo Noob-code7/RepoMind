@@ -1,11 +1,14 @@
 /**
- * human_gate/gate_review.ts
- * Gate 1: Checkpoint between Review and Execute.
- * Allows human to inspect the plan and review critique, and either approve
- * or provide feedback to revise the plan.
+ * human_gate/gate_review.ts — Gate 1: approve/revise the plan before any code.
+ * Minimal CLI-first flow. No LLM calls. Rejections require feedback,
+ * which the orchestrator folds into the next Planning pass.
  */
-import readline from 'node:readline';
-import { GateDecision, PlanOutput, ReviewOutput } from '../shared/types.js';
+import { createInterface } from 'node:readline';
+import type {
+  GateDecision,
+  PlanOutput,
+  ReviewOutput,
+} from '../shared/types.js';
 
 export type GateReviewHandler = (
   plan: PlanOutput,
@@ -19,12 +22,58 @@ export function setGateReviewHandler(handler: GateReviewHandler | null): void {
   customGateHandler = handler;
 }
 
-export async function promptGateReview(
+/** Validate + normalize a gate decision (feedback mandatory on reject). */
+export function decideGateReview(
+  approved: boolean,
+  feedback?: string,
+): GateDecision {
+  if (!approved && (!feedback || feedback.trim().length === 0)) {
+    throw new Error('[gate_review] feedback is required when rejecting the plan');
+  }
+  return approved
+    ? { approved: true }
+    : { approved: false, feedback: feedback!.trim() };
+}
+
+/** Human-readable plan + review summary shown at the gate. */
+export function formatPlanSummary(
   plan: PlanOutput,
-  review: ReviewOutput,
+  review?: ReviewOutput,
+): string {
+  const lines = [
+    `Project: ${plan.manifest.project}`,
+    `Files (${plan.manifest.files.length}):`,
+    ...plan.manifest.files.map(
+      (f) => `  - ${f.path} — ${f.purpose} [${f.expectedExports.join(', ') || 'no exports'}]`,
+    ),
+    `Tasks (${plan.taskGraph.nodes.length}):`,
+    ...plan.taskGraph.nodes.map(
+      (t) => `  - ${t.id}: ${t.title} → ${t.files.join(', ')}`,
+    ),
+    `Test stubs (${plan.testStubs.length}):`,
+    ...plan.testStubs.map(
+      (s: any) => `  - ${s.file || s.targetFile}: ${s.name || s.description}`,
+    ),
+  ];
+  if (review) {
+    lines.push(
+      `Review risks (${review.riskScore.toFixed(2)}):`,
+      ...review.risks.map((r) => `  ! ${r}`),
+      ...review.critiques.map((c) => `  - ${c}`),
+    );
+  }
+  return lines.join('\n');
+}
+
+/** Interactive CLI prompt. Supports both summary string or (plan, review) objects. */
+export async function promptGateReview(
+  summaryOrPlan: string | PlanOutput,
+  maybeReview?: ReviewOutput,
 ): Promise<GateDecision> {
-  if (customGateHandler) {
-    return await customGateHandler(plan, review);
+  if (typeof summaryOrPlan !== 'string') {
+    if (customGateHandler && maybeReview) {
+      return await customGateHandler(summaryOrPlan, maybeReview);
+    }
   }
 
   // If running in headless/CI environment without TTY
@@ -33,41 +82,22 @@ export async function promptGateReview(
     return { approved: true };
   }
 
-  // Interactive CLI prompt
-  console.log('\n================== HUMAN GATE: PLAN REVIEW ==================');
-  console.log(`Project: ${plan.manifest.project}`);
-  console.log(`Planned Files (${plan.manifest.files.length}):`);
-  for (const f of plan.manifest.files) {
-    console.log(`  - ${f.path}: ${f.purpose} [exports: ${f.expectedExports.join(', ')}]`);
-  }
-  console.log(`\nReview Risk Score: ${(review.riskScore * 100).toFixed(1)}%`);
-  if (review.critiques.length > 0) {
-    console.log('Critiques:');
-    review.critiques.forEach((c) => console.log(`  * ${c}`));
-  }
-  if (review.risks.length > 0) {
-    console.log('Risks:');
-    review.risks.forEach((r) => console.log(`  ! ${r}`));
-  }
-  console.log('=============================================================\n');
+  const summary = typeof summaryOrPlan === 'string'
+    ? summaryOrPlan
+    : formatPlanSummary(summaryOrPlan, maybeReview);
 
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-
-  return new Promise<GateDecision>((resolve) => {
-    rl.question('Approve this plan to proceed to execution? (y/n): ', (ans) => {
-      const lower = ans.trim().toLowerCase();
-      if (lower === 'y' || lower === 'yes') {
-        rl.close();
-        resolve({ approved: true });
-      } else {
-        rl.question('Please enter your feedback/revisions for the Planner: ', (feedback) => {
-          rl.close();
-          resolve({ approved: false, feedback: feedback.trim() });
-        });
-      }
-    });
-  });
+  console.log('\n=== GATE 1: Plan Review ===\n' + summary + '\n');
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const ask = (q: string): Promise<string> =>
+    new Promise((resolve) => rl.question(q, resolve));
+  try {
+    const answer = (await ask('Approve plan? [y/N]: ')).trim().toLowerCase();
+    if (answer === 'y' || answer === 'yes') {
+      return { approved: true };
+    }
+    const feedback = (await ask('Feedback for re-plan (required): ')).trim();
+    return decideGateReview(false, feedback);
+  } finally {
+    rl.close();
+  }
 }

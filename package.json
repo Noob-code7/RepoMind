@@ -3,7 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Braid — autonomous multi-model SDLC agent with chunked two-pass generation",
+  "bin": {
+    "braid": "./bin/braid.js"
+  },
   "scripts": {
     "build": "node --single-threaded ./node_modules/typescript/bin/tsc --noEmit",
     "test": "vitest run",
@@ -11,6 +13,8 @@
     "demo": "node --single-threaded ./node_modules/tsx/dist/cli.mjs orchestrator/state_machine.ts",
     "typecheck": "node --single-threaded ./node_modules/typescript/bin/tsc --noEmit",
     "braid": "node --single-threaded ./node_modules/tsx/dist/cli.mjs cli.ts",
+    "repl": "node --single-threaded ./node_modules/tsx/dist/cli.mjs repl.ts",
+    "tui": "node --single-threaded ./node_modules/tsx/dist/cli.mjs repl.ts",
     "plan": "node --single-threaded ./node_modules/tsx/dist/cli.mjs cli.ts plan",
     "review": "node --single-threaded ./node_modules/tsx/dist/cli.mjs cli.ts review",
     "approve": "node --single-threaded ./node_modules/tsx/dist/cli.mjs cli.ts approve",

@@ -26,15 +26,15 @@ export interface BraidConfig {
 }
 
 const STAGE_KEYS: Record<string, string[]> = {
-  plan: ['PLAN_API_KEY', 'ANTHROPIC_API_KEY'],
-  review: ['REVIEW_API_KEY', 'OPENAI_API_KEY'],
-  execute: ['EXECUTE_API_KEY', 'OPENAI_API_KEY'],
-  triage: ['TRIAGE_API_KEY', 'OPENAI_API_KEY'],
-  report: ['REPORT_API_KEY', 'OPENAI_API_KEY'],
+  plan: ['PLAN_API_KEY', 'DEEPSEEK_API_KEY', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY'],
+  review: ['REVIEW_API_KEY', 'GEMINI_API_KEY', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY'],
+  execute: ['EXECUTE_API_KEY', 'OPENROUTER_API_KEY', 'OPENAI_API_KEY'],
+  triage: ['TRIAGE_API_KEY', 'DEEPSEEK_API_KEY', 'GEMINI_API_KEY', 'OPENAI_API_KEY'],
+  report: ['REPORT_API_KEY', 'GEMINI_API_KEY', 'DEEPSEEK_API_KEY', 'OPENAI_API_KEY'],
 };
 
 export function apiKeyFor(stage: string): string {
-  const names = STAGE_KEYS[stage] ?? ['OPENAI_API_KEY'];
+  const names = STAGE_KEYS[stage] ?? ['OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'DEEPSEEK_API_KEY', 'GEMINI_API_KEY'];
   for (const n of names) {
     const v = process.env[n];
     if (v && v.length > 0) return v;
@@ -43,11 +43,11 @@ export function apiKeyFor(stage: string): string {
 }
 
 export const config: BraidConfig = {
-  planModel: strEnv('PLAN_MODEL', 'claude-opus-4-1'),
-  reviewModel: strEnv('REVIEW_MODEL', 'gpt-5'),
-  executeModel: strEnv('EXECUTE_MODEL', 'gpt-5-codex'),
-  triageModel: strEnv('TRIAGE_MODEL', 'gpt-5-mini'),
-  reportModel: strEnv('REPORT_MODEL', 'gpt-5-mini'),
+  planModel: strEnv('PLAN_MODEL', 'deepseek-reasoner'),
+  reviewModel: strEnv('REVIEW_MODEL', 'gemini-2.5-flash'),
+  executeModel: strEnv('EXECUTE_MODEL', 'nvidia/llama-3.1-nemotron-70b-instruct'),
+  triageModel: strEnv('TRIAGE_MODEL', 'deepseek-chat'),
+  reportModel: strEnv('REPORT_MODEL', 'gemini-2.5-flash'),
   maxSelfLoopIterations: intEnv('MAX_SELF_LOOP_ITERATIONS', 3),
   generatedRoot: strEnv('GENERATED_ROOT', './generated_projects'),
   apiKeyFor,

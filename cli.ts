@@ -24,6 +24,8 @@ import {
   startCliAnimation,
 } from './brand/cli_mark.js';
 import { PipelineOrchestrator } from './orchestrator/pipeline_orchestrator.js';
+import { setMockHandler } from './shared/llm_client.js';
+import type { FileManifest } from './shared/types.js';
 
 async function main() {
   const args = process.argv.slice(2);
@@ -57,6 +59,12 @@ async function main() {
       runBrandMotionDemo();
       break;
     }
+    case 'repl':
+    case 'tui': {
+      const { replMain } = await import('./repl.js');
+      await replMain();
+      break;
+    }
     case 'help':
     default: {
       printHelp();
@@ -70,6 +78,7 @@ function printHelp() {
   ${ANSI_BOLD}${ANSI_IVORY}Braid${ANSI_RESET} ${ANSI_MUTED}— Autonomous Multi-Model SDLC Orchestrator${ANSI_RESET}
 
   ${ANSI_PEACH}Commands:${ANSI_RESET}
+    ${ANSI_IVORY}repl | tui${ANSI_RESET}          Launch interactive full-screen TUI REPL
     ${ANSI_IVORY}plan [PRD.md]${ANSI_RESET}    Map context and generate repository-aware task DAG & manifest
     ${ANSI_IVORY}review [PRD.md]${ANSI_RESET}  Independent architectural critique of the build plan
     ${ANSI_IVORY}approve${ANSI_RESET}          Sign off on plan & generate locked execution manifest
@@ -287,7 +296,96 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-main().catch((err) => {
-  console.error('\nBraid CLI Error:', err);
-  process.exit(1);
-});
+export function installMock(project: string): void {
+  let mockManifest: FileManifest | null = null;
+  setMockHandler((req) => {
+    if (req.stage === 'plan') {
+      return JSON.stringify({
+        project,
+        manifest: {
+          files: [
+            {
+              path: 'src/index.ts',
+              purpose: 'entry point',
+              expectedExports: ['main'],
+              dependencies: ['./app.js'],
+              status: 'planned',
+            },
+            {
+              path: 'src/app.ts',
+              purpose: 'core logic',
+              expectedExports: ['build'],
+              dependencies: [],
+              status: 'planned',
+            },
+          ],
+        },
+        testStubs: [
+          {
+            targetFile: 'src/index.ts',
+            testFile: 'tests/index.test.ts',
+            description: 'main() returns "ok"',
+            assertion: 'expect(main()).toBe("ok")',
+          },
+        ],
+      });
+    }
+    if (req.stage === 'review') {
+      return JSON.stringify({
+        critiques: ['Mock review: plan is well-scoped.'],
+        risks: ['Mock mode enabled — no live LLM invoked.'],
+        riskScore: 0.1,
+      });
+    }
+    if (req.stage === 'execute') {
+      if (req.systemPrompt.includes('skeleton pass')) {
+        if (!mockManifest) throw new Error('[mock] skeleton pass ran before manifest was set');
+        const files = mockManifest.files.map((f) => ({
+          path: f.path,
+          code: `/** ${f.purpose} */\n` + f.expectedExports
+            .map((e) => `export function ${e}(): string { throw new Error("not implemented"); }`)
+            .join('\n') + '\n',
+        }));
+        return JSON.stringify({ files });
+      }
+      const m = /TARGET FILE: (\S+)/.exec(req.userPrompt);
+      const target = m?.[1] ?? '';
+      if (target.endsWith('src/app.ts')) return 'export function build(): string { return "ok"; }\n';
+      if (target.endsWith('src/index.ts')) {
+        return 'import { build } from "./app.js";\nexport function main(): string { return build(); }\n';
+      }
+      return 'export const ok = true;\n';
+    }
+    if (req.stage === 'report') {
+      return JSON.stringify({
+        diffSummary: `Mock demo cycle for ${project}: 2 files implemented, smoke passing.`,
+        flaggedRisks: [],
+      });
+    }
+    if (req.stage === 'triage') return JSON.stringify({ patches: [] });
+    throw new Error(`[mock] Unhandled stage: ${req.stage}`);
+  });
+  (globalThis as Record<string, unknown>).__braidMockManifest = (m: FileManifest) => {
+    mockManifest = m;
+  };
+}
+
+export function setMockManifest(m: FileManifest): void {
+  const setter = (globalThis as Record<string, unknown>).__braidMockManifest as
+    | ((m: FileManifest) => void)
+    | undefined;
+  setter?.(m);
+}
+
+// Only auto-run when invoked directly as the entry point
+if (
+  typeof process.argv[1] === 'string' &&
+  (process.argv[1].endsWith('cli.ts') || process.argv[1].endsWith('cli.js'))
+) {
+  main().catch((err) => {
+    console.error('\nBraid CLI Error:', err);
+    process.exit(1);
+  });
+}
+
+export { main };

@@ -12,7 +12,99 @@ import {
   validateManifest,
 } from '../shared/types.js';
 
+export function manifestPathFor(
+  generatedRoot: string,
+  project: string,
+): string {
+  return path.join(generatedRoot, project, 'manifest.json');
+}
+
 export class ManifestStore {
+  private manifest: FileManifest;
+  private readonly manifestFilePath: string;
+
+  constructor(
+    manifestPath: string,
+    initial: FileManifest,
+  ) {
+    validateManifest(initial);
+    this.manifest = structuredClone(initial);
+    this.manifestFilePath = manifestPath;
+    this.save();
+  }
+
+  get path(): string {
+    return this.manifestFilePath;
+  }
+
+  get project(): string {
+    return this.manifest.project;
+  }
+
+  get files(): FileManifestEntry[] {
+    return this.manifest.files;
+  }
+
+  list(): FileManifestEntry[] {
+    return structuredClone(this.manifest.files);
+  }
+
+  snapshot(): FileManifest {
+    return structuredClone(this.manifest);
+  }
+
+  get(filePath: string): FileManifestEntry | undefined {
+    const found = this.manifest.files.find((f) => f.path === filePath);
+    return found ? structuredClone(found) : undefined;
+  }
+
+  has(filePath: string): boolean {
+    return this.manifest.files.some((f) => f.path === filePath);
+  }
+
+  setStatus(filePath: string, status: FileStatus): void {
+    const entry = this.manifest.files.find((f) => f.path === filePath);
+    if (!entry) throw new Error(`[manifest_store] Unknown path: ${filePath}`);
+    entry.status = status;
+    this.save();
+  }
+
+  setManyStatus(paths: readonly string[], status: FileStatus): void {
+    for (const p of paths) {
+      const entry = this.manifest.files.find((f) => f.path === p);
+      if (!entry) throw new Error(`[manifest_store] Unknown path: ${p}`);
+      entry.status = status;
+    }
+    this.save();
+  }
+
+  dependenciesOf(filePath: string): string[] {
+    const entry = this.manifest.files.find((f) => f.path === filePath);
+    if (!entry) throw new Error(`[manifest_store] Unknown path: ${filePath}`);
+    return [...entry.dependencies];
+  }
+
+  dependentsOf(filePath: string): string[] {
+    return this.manifest.files
+      .filter((f) => f.dependencies.includes(filePath))
+      .map((f) => f.path);
+  }
+
+  byStatus(status: FileStatus): string[] {
+    return this.manifest.files
+      .filter((f) => f.status === status)
+      .map((f) => f.path);
+  }
+
+  save(): void {
+    fs.mkdirSync(path.dirname(this.manifestFilePath), { recursive: true });
+    fs.writeFileSync(
+      this.manifestFilePath,
+      JSON.stringify(this.manifest, null, 2) + '\n',
+      'utf8',
+    );
+  }
+
   /**
    * Resolve path to manifest file for a given project directory.
    */
@@ -21,31 +113,45 @@ export class ManifestStore {
   }
 
   /**
-   * Load manifest from disk, verifying its structure.
+   * Load manifest from disk. Works for both directory paths or direct file paths.
    */
-  static load(projectRoot: string): FileManifest | null {
-    const p = ManifestStore.manifestPath(projectRoot);
-    if (!fs.existsSync(p)) return null;
-    try {
-      const raw = fs.readFileSync(p, 'utf-8');
-      const data = JSON.parse(raw);
-      validateManifest(data);
-      return data;
-    } catch (err) {
-      console.warn(`[manifest_store] Failed to load manifest at ${p}:`, err);
-      return null;
+  static load(pathOrRoot: string): ManifestStore {
+    let filePath = pathOrRoot;
+    if (!filePath.endsWith('.json')) {
+      const p1 = path.join(pathOrRoot, '.braid_manifest.json');
+      const p2 = path.join(pathOrRoot, 'manifest.json');
+      filePath = fs.existsSync(p1) ? p1 : fs.existsSync(p2) ? p2 : p1;
     }
+    if (!fs.existsSync(filePath)) {
+      throw new Error(`[manifest_store] Not found: ${filePath}`);
+    }
+    const raw = fs.readFileSync(filePath, 'utf-8');
+    const parsed = JSON.parse(raw);
+    validateManifest(parsed);
+    const store = new ManifestStore(filePath, parsed);
+    return store;
+  }
+
+  static loadOrInit(
+    manifestPath: string,
+    initial: FileManifest,
+  ): ManifestStore {
+    if (fs.existsSync(manifestPath)) return ManifestStore.load(manifestPath);
+    fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
+    return new ManifestStore(manifestPath, initial);
   }
 
   /**
-   * Save manifest to disk atomically.
+   * Save manifest to disk atomically (static legacy).
    */
   static save(projectRoot: string, manifest: FileManifest): void {
     validateManifest(manifest);
     if (!fs.existsSync(projectRoot)) {
       fs.mkdirSync(projectRoot, { recursive: true });
     }
-    const p = ManifestStore.manifestPath(projectRoot);
+    const p = projectRoot.endsWith('.json')
+      ? projectRoot
+      : ManifestStore.manifestPath(projectRoot);
     const tmp = `${p}.tmp`;
     fs.writeFileSync(tmp, JSON.stringify(manifest, null, 2), 'utf-8');
     fs.renameSync(tmp, p);

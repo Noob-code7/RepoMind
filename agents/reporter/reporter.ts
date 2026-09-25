@@ -71,3 +71,24 @@ export async function runReporter(options: ReporterOptions): Promise<CycleReport
     prdCoverage: Array.isArray(output.prdCoverage) ? output.prdCoverage : [],
   };
 }
+
+export interface GenerateReportRequest {
+  manifest: FileManifest;
+  testResults: TestResults;
+  changedFiles: string[];
+  risks?: string[];
+  requirements?: string[];
+}
+
+export async function generateReport(
+  req: GenerateReportRequest,
+): Promise<CycleReport> {
+  const prd = (req.requirements || []).join('\n') || 'Requirements coverage report';
+  return runReporter({
+    prd,
+    manifest: req.manifest,
+    testResults: req.testResults,
+    unresolvedRisks: req.risks,
+    diffSummary: `Cycle changed files: ${req.changedFiles.join(', ')}`,
+  });
+}

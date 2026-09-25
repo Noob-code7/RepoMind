@@ -44,3 +44,5 @@ export async function runReviewer(
     riskScore: typeof output.riskScore === 'number' ? Math.max(0, Math.min(1, output.riskScore)) : 0.5,
   };
 }
+
+export const reviewPlan = runReviewer;

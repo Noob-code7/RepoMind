@@ -64,3 +64,17 @@ export async function runPlanner(options: PlanOptions): Promise<PlanOutput> {
 
   return output;
 }
+
+export interface PlanRequest {
+  project: string;
+  prd: string;
+  feedback?: string;
+}
+
+export async function planProject(req: PlanRequest): Promise<PlanOutput> {
+  return runPlanner({
+    prd: req.prd,
+    projectName: req.project,
+    feedback: req.feedback,
+  });
+}

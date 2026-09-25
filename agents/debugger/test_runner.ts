@@ -188,3 +188,21 @@ export class TestRunner {
     return { results, failures, rawStdout, rawStderr };
   }
 }
+
+export interface TestRunOptions {
+  braidRoot?: string;
+  projectRoot: string;
+  manifest: FileManifest;
+  stubs: TestStub[];
+  priorStubs?: { passed: number; failed: number };
+}
+
+export async function runTests(
+  opts: TestRunOptions,
+): Promise<TestResults> {
+  const output = await TestRunner.runTests(opts.projectRoot, opts.manifest, opts.stubs);
+  if (opts.priorStubs) {
+    output.results.regression = { ...opts.priorStubs };
+  }
+  return output.results;
+}
