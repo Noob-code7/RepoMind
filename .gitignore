@@ -1,0 +1,17 @@
+# Node dependencies
+node_modules/
+braid/node_modules/
+
+# Environment files
+.env
+.env.local
+*.env
+
+# Build outputs
+dist/
+build/
+*.tsbuildinfo
+
+# Logs & temp
+*.log
+.DS_Store
