@@ -23,7 +23,6 @@ import {
 
 export const DEFAULT_MAX_AGILE_CYCLES = 5;
 
-
 export class LoopController {
   private selfLoopAttempts = 0;
   private agileCycles = 0;
