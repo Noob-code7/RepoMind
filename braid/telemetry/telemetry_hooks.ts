@@ -8,7 +8,7 @@
 import { randomUUID } from 'node:crypto';
 import { eventPipeline } from './event_pipeline.js';
 import { tigerClient } from './tiger_client.js';
-import type { TelemetryEvent, TelemetryEventType, TelemetrySeverity, TelemetryStage } from './types.js';
+import type { RunRecord, TelemetryEvent, TelemetryEventType, TelemetrySeverity, TelemetryStage } from './types.js';
 
 export interface ActiveRunContext {
   runId: string;
@@ -20,6 +20,26 @@ export interface ActiveRunContext {
 let activeRun: ActiveRunContext | null = null;
 const testListeners: Array<(event: TelemetryEvent) => void> = [];
 const testEventsBuffer: TelemetryEvent[] = [];
+
+/**
+ * Serialize sdlc_runs upserts per run so rapid sequences (e.g. run_started
+ * immediately followed by run_completed) cannot land out of order and leave
+ * a stale status behind. Still fire-and-forget: callers never block.
+ */
+const runUpsertTails = new Map<string, Promise<void>>();
+function upsertRunSerialized(run: RunRecord): void {
+  const prev = runUpsertTails.get(run.runId) ?? Promise.resolve();
+  const next: Promise<void> = prev
+    .then(() => tigerClient.upsertRun(run))
+    .then(
+      () => undefined,
+      () => undefined,
+    );
+  runUpsertTails.set(run.runId, next);
+  void next.then(() => {
+    if (runUpsertTails.get(run.runId) === next) runUpsertTails.delete(run.runId);
+  });
+}
 
 /** Register a test listener or record buffer for testing without a database */
 export function addTelemetryListener(fn: (event: TelemetryEvent) => void): () => void {
@@ -133,14 +153,14 @@ export function emitRunStarted(args: {
   });
 
   if (tigerClient.isEnabled) {
-    void tigerClient.upsertRun({
+    upsertRunSerialized({
       runId,
       projectName: args.projectName,
       startedAt: new Date(activeRun?.startedAt || Date.now()),
       status: 'running',
       prdPath: args.prdPath,
       metadata: { mock: args.mock, smokeOnly: args.smokeOnly },
-    }).catch(() => {});
+    });
   }
 
   return runId;
@@ -170,14 +190,14 @@ export function emitRunCompleted(args: {
   if (tigerClient.isEnabled) {
     const runId = args.runId || activeRun?.runId || 'untracked-run';
     const projectName = activeRun?.projectName || 'unknown';
-    void tigerClient.upsertRun({
+    upsertRunSerialized({
       runId,
       projectName,
       startedAt: new Date(activeRun?.startedAt || Date.now()),
       completedAt: new Date(),
       status: args.status,
       metadata: { error: args.error, durationMs },
-    }).catch(() => {});
+    });
   }
 }
 

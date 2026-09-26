@@ -1,5 +1,5 @@
-/** shared/config.ts — Single typed view over env. No LLM calls. */
-import 'dotenv/config';
+import dotenv from 'dotenv';
+dotenv.config({ override: true });
 
 function intEnv(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -26,6 +26,10 @@ export interface BraidConfig {
   executeModel: string;
   triageModel: string;
   reportModel: string;
+  ollamaBaseUrl: string;
+  elevenLabsApiKey: string;
+  elevenLabsVoiceId: string;
+  elevenLabsModelId: string;
   maxSelfLoopIterations: number;
   generatedRoot: string;
   /** Tiger Data / TimescaleDB telemetry configuration */
@@ -38,16 +42,16 @@ export interface BraidConfig {
 }
 
 const STAGE_KEYS: Record<string, string[]> = {
-  chat: ['CHAT_API_KEY', 'OPENROUTER_API_KEY', 'GEMINI_API_KEY', 'DEEPSEEK_API_KEY', 'OPENAI_API_KEY'],
-  plan: ['PLAN_API_KEY', 'OPENROUTER_API_KEY', 'GEMINI_API_KEY', 'DEEPSEEK_API_KEY', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY'],
-  review: ['REVIEW_API_KEY', 'OPENROUTER_API_KEY', 'GEMINI_API_KEY', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY'],
+  chat: ['CHAT_API_KEY', 'GEMINI_API_KEY', 'OPENROUTER_API_KEY', 'OPENAI_API_KEY'],
+  plan: ['PLAN_API_KEY', 'GEMINI_API_KEY', 'OPENROUTER_API_KEY', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY'],
+  review: ['REVIEW_API_KEY', 'GEMINI_API_KEY', 'OPENROUTER_API_KEY', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY'],
   execute: ['EXECUTE_API_KEY', 'OPENROUTER_API_KEY', 'OPENAI_API_KEY'],
-  triage: ['TRIAGE_API_KEY', 'OPENROUTER_API_KEY', 'DEEPSEEK_API_KEY', 'GEMINI_API_KEY', 'OPENAI_API_KEY'],
-  report: ['REPORT_API_KEY', 'OPENROUTER_API_KEY', 'GEMINI_API_KEY', 'DEEPSEEK_API_KEY', 'OPENAI_API_KEY'],
+  triage: ['TRIAGE_API_KEY', 'GEMINI_API_KEY', 'OPENROUTER_API_KEY', 'OPENAI_API_KEY'],
+  report: ['REPORT_API_KEY', 'GEMINI_API_KEY', 'OPENROUTER_API_KEY', 'OPENAI_API_KEY'],
 };
 
 export function apiKeyFor(stage: string): string {
-  const names = STAGE_KEYS[stage] ?? ['OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'DEEPSEEK_API_KEY', 'GEMINI_API_KEY'];
+  const names = STAGE_KEYS[stage] ?? ['OPENAI_API_KEY', 'GEMINI_API_KEY', 'OPENROUTER_API_KEY'];
   for (const n of names) {
     const v = process.env[n];
     if (v && v.length > 0) return v;
@@ -61,12 +65,16 @@ const tigerTelemetryEnabled = Boolean(
 );
 
 export const config: BraidConfig = {
-  chatModel: strEnv('CHAT_MODEL', 'google/gemma-4-26b-a4b-it'),
-  planModel: strEnv('PLAN_MODEL', 'google/gemma-4-26b-a4b-it'),
-  reviewModel: strEnv('REVIEW_MODEL', 'nvidia/nemotron-3-ultra-550b-a55b'),
-  executeModel: strEnv('EXECUTE_MODEL', 'nvidia/nemotron-3-ultra-550b-a55b'),
-  triageModel: strEnv('TRIAGE_MODEL', 'nvidia/nemotron-3.5-lightning'),
-  reportModel: strEnv('REPORT_MODEL', 'google/gemma-4-26b-a4b-it'),
+  chatModel: strEnv('CHAT_MODEL', 'qwen2.5-coder:7b'),
+  planModel: strEnv('PLAN_MODEL', 'gemini-3.8-flash'),
+  reviewModel: strEnv('REVIEW_MODEL', 'gemini-3.8-flash'),
+  executeModel: strEnv('EXECUTE_MODEL', 'qwen2.5-coder:7b'),
+  triageModel: strEnv('TRIAGE_MODEL', 'qwen2.5-coder:7b'),
+  reportModel: strEnv('REPORT_MODEL', 'qwen2.5-coder:7b'),
+  ollamaBaseUrl: strEnv('OLLAMA_BASE_URL', strEnv('LOCAL_LLM_BASE_URL', 'http://localhost:11434')),
+  elevenLabsApiKey: strEnv('ELEVENLABS_API_KEY', ''),
+  elevenLabsVoiceId: strEnv('ELEVENLABS_VOICE_ID', 'kiaJRdXJzloFWi6AtFBf'),
+  elevenLabsModelId: strEnv('ELEVENLABS_MODEL_ID', 'eleven_multilingual_v2'),
   maxSelfLoopIterations: intEnv('MAX_SELF_LOOP_ITERATIONS', 3),
   generatedRoot: strEnv('GENERATED_ROOT', './generated_projects'),
   tigerDatabaseUrl: tigerDbUrl,

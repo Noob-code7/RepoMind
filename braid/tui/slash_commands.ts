@@ -32,12 +32,14 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   // Backward-compatible extras (kept out of the primary help grid spotlight
   // but still searchable so existing muscle memory keeps working).
   { name: 'run', description: 'Run the full pipeline loop (plan → report)', usage: '/run' },
+  { name: 'telemetry', description: 'Show recorded run telemetry', usage: '/telemetry <run-id>' },
   { name: 'execute', description: 'Alias of /build', usage: '/execute' },
   { name: 'mode', description: 'Show or set the active mode', usage: '/mode [chat|plan|review|build|debug|report]' },
   { name: 'prd', description: 'Load a PRD file into the buffer', usage: '/prd <file>' },
   { name: 'project', description: 'Switch project (output dir)', usage: '/project <name>' },
   { name: 'mock', description: 'Toggle offline demo models', usage: '/mock' },
   { name: 'smoke', description: 'Toggle vitest skipping (smoke-only)', usage: '/smoke' },
+  { name: 'voice', description: 'Toggle voice conversation mode (STT / ElevenLabs TTS)', usage: '/voice [on|off]' },
   { name: 'quit', description: 'Alias of /exit', usage: '/quit' },
 ];
 
@@ -78,7 +80,8 @@ export function helpText(): string {
     ...rows,
     '',
     'Aliases: /execute (= /build), /run (full loop), /quit (= /exit),',
-    '         /mode, /prd <file>, /project <name>, /mock, /smoke, /config',
+    '         /mode, /prd <file>, /project <name>, /mock, /smoke, /config,',
+    '         /telemetry <run-id> (recorded run summary)',
     '',
     'Keyboard:',
     '  Tab / Shift+Tab   cycle modes (history + context preserved)',

@@ -24,6 +24,7 @@ export interface PersistedSession {
   mode: Mode;
   /** Active chat model id (selector beneath input). Defaults to plan model. */
   chatModel?: string;
+  voiceEnabled?: boolean;
   updatedAt: string;
 }
 
@@ -43,6 +44,7 @@ export function defaultSession(): PersistedSession {
     mock: false,
     smokeOnly: false,
     mode: 'chat',
+    voiceEnabled: false,
     updatedAt: new Date().toISOString(),
   };
 }
@@ -70,6 +72,7 @@ export function loadSession(file?: string): PersistedSession {
       smokeOnly: o['smokeOnly'] === true,
       mode,
       chatModel: typeof o['chatModel'] === 'string' && o['chatModel'] ? (o['chatModel'] as string).slice(0, 200) : undefined,
+      voiceEnabled: o['voiceEnabled'] === true,
       updatedAt: typeof o['updatedAt'] === 'string' ? o['updatedAt'] : base.updatedAt,
     };
   } catch {

@@ -63,16 +63,38 @@ function modelFor(req: LlmRequest): string {
   return effectiveModel(req.stage);
 }
 
+import {
+  completeOllamaChat,
+  getOllamaBaseUrl,
+  streamOllamaChat,
+} from './ollama_client.js';
+
+export function isOllama(model: string): boolean {
+  const low = model.toLowerCase().trim();
+  if (low.startsWith('ollama/') || low.startsWith('local/')) return true;
+  if (low.includes('/')) return false; // Vendor slugs like google/gemma route to OpenRouter
+  return (
+    low.startsWith('qwen') ||
+    low.startsWith('llama') ||
+    low.startsWith('mistral') ||
+    low.startsWith('codellama') ||
+    low.startsWith('phi') ||
+    low.includes(':')
+  );
+}
+
 function isClaude(model: string): boolean {
   return model.toLowerCase().startsWith('claude');
 }
 
 function requireKey(stage: LlmStage): string {
+  const model = effectiveModel(stage);
+  if (isOllama(model)) return 'ollama';
   const key = apiKeyFor(stage);
   if (!key) {
     throw new Error(
       `[llm_client] Missing API key for stage "${stage}". ` +
-        `Set ${stage.toUpperCase()}_API_KEY (or OPENAI/ANTHROPIC fallback) in .env. ` +
+        `Set ${stage.toUpperCase()}_API_KEY (or GEMINI/OPENAI fallback) in .env. ` +
         `For offline tests use setMockHandler().`,
     );
   }
@@ -86,15 +108,22 @@ interface ProviderConfig {
 
 function resolveProvider(model: string, key: string): ProviderConfig {
   const low = model.toLowerCase();
+
+  // Local Ollama
+  if (isOllama(model)) {
+    return {
+      baseURL: `${getOllamaBaseUrl()}/v1`,
+    };
+  }
+
   // 1. OpenRouter — model-slug match wins (reliable even when stage keys
   //    still hold a stale DeepSeek/Gemini value). All '/' slugs route here.
   if (
-    low.includes('nemotron') ||
-    low.includes('qwen') ||
     low.startsWith('google/') ||
     low.startsWith('nvidia/') ||
     low.startsWith('deepseek/') ||
     low.startsWith('moonshotai/') ||
+    low.startsWith('qwen/') ||
     model.includes('/')
   ) {
     return {
@@ -177,11 +206,59 @@ function anthropic(key: string): Anthropic {
   return anthropicCache.client;
 }
 
+export interface LlmStreamRequest extends LlmRequest {
+  onToken: (token: string) => void;
+  signal?: AbortSignal;
+}
+
+/** Streaming text completion for any stage (particularly chat). */
+export async function completeStream(req: LlmStreamRequest): Promise<string> {
+  if (mockHandler) {
+    const full = await mockHandler(req);
+    const tokens = full.split(/(\s+)/);
+    for (const t of tokens) {
+      if (req.signal?.aborted) throw new Error('Request aborted');
+      req.onToken(t);
+    }
+    return full;
+  }
+  const model = modelFor(req);
+  if (isOllama(model)) {
+    return streamOllamaChat({
+      model,
+      messages: [
+        { role: 'system', content: req.systemPrompt },
+        { role: 'user', content: req.userPrompt },
+      ],
+      temperature: req.temperature,
+      maxTokens: req.maxTokens,
+      signal: req.signal,
+      onToken: req.onToken,
+    });
+  }
+  const res = await complete(req);
+  req.onToken(res);
+  return res;
+}
+
 /** Raw text completion for a stage. Reusable by all agents. */
 export async function complete(req: LlmRequest): Promise<string> {
   if (mockHandler) return mockHandler(req);
   const model = modelFor(req);
   const key = requireKey(req.stage);
+
+  if (isOllama(model)) {
+    return completeOllamaChat({
+      model,
+      messages: [
+        { role: 'system', content: req.systemPrompt },
+        { role: 'user', content: req.userPrompt },
+      ],
+      temperature: req.temperature,
+      maxTokens: req.maxTokens,
+    });
+  }
+
   if (isClaude(model)) {
     const res = await anthropic(key).messages.create({
       model,
@@ -212,16 +289,35 @@ export async function complete(req: LlmRequest): Promise<string> {
     params.temperature = req.temperature ?? 0.2;
   }
 
-  const res = await client.chat.completions.create(params);
-  const msg = res.choices[0]?.message as
-    | { content?: unknown; reasoning?: unknown; reasoning_details?: unknown }
-    | undefined;
-  if (typeof msg?.content === 'string' && msg.content.trim()) return msg.content;
-  // Reasoning models (Nemotron Ultra / Lightning) may put the answer in
-  // `reasoning` with null content when max_tokens clips thinking. Fall back
-  // so execute/plan stages don't see "Empty output".
-  if (typeof msg?.reasoning === 'string' && msg.reasoning.trim()) return msg.reasoning;
-  return (msg?.content as string) ?? '';
+  try {
+    const res = await client.chat.completions.create(params);
+    const msg = res.choices[0]?.message as
+      | { content?: unknown; reasoning?: unknown; reasoning_details?: unknown }
+      | undefined;
+    if (typeof msg?.content === 'string' && msg.content.trim()) return msg.content;
+    // Reasoning models (Nemotron Ultra / Lightning) may put the answer in
+    // `reasoning` with null content when max_tokens clips thinking. Fall back
+    // so execute/plan stages don't see "Empty output".
+    if (typeof msg?.reasoning === 'string' && msg.reasoning.trim()) return msg.reasoning;
+    return (msg?.content as string) ?? '';
+  } catch (err) {
+    if (model.toLowerCase().startsWith('gemini') && process.env.OPENROUTER_API_KEY) {
+      const fallbackModel = 'nvidia/nemotron-3-ultra-550b-a55b';
+      const fallbackProvider = resolveProvider(fallbackModel, process.env.OPENROUTER_API_KEY);
+      const fallbackClient = getOpenAIClient(process.env.OPENROUTER_API_KEY, fallbackProvider.baseURL, fallbackProvider.defaultHeaders);
+      const fallbackRes = await fallbackClient.chat.completions.create({
+        ...params,
+        model: fallbackModel,
+        max_tokens: Math.min(params.max_tokens ?? 4096, 4096),
+      });
+      const fallbackMsg = fallbackRes.choices[0]?.message as
+        | { content?: unknown; reasoning?: unknown }
+        | undefined;
+      if (typeof fallbackMsg?.content === 'string' && fallbackMsg.content.trim()) return fallbackMsg.content;
+      if (typeof fallbackMsg?.reasoning === 'string' && fallbackMsg.reasoning.trim()) return fallbackMsg.reasoning;
+    }
+    throw err;
+  }
 }
 
 /** Strip code fences and parse JSON. Retries once with a repair nudge. */

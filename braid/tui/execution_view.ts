@@ -92,20 +92,6 @@ export function formatDiffStatsPlain(e: ActivityEvent): string {
 }
 
 /**
- * Minimal tab bar: Problems · Output · Debug Console · Terminal (active).
- * Reference-chat chrome: dim gray tabs, off-white active tab.
- */
-export function renderTabBar(cols: number): string {
-  const tabs = ['Problems', 'Output', 'Debug Console', 'Terminal'];
-  const parts = tabs.map((t) =>
-    t === 'Terminal'
-      ? `${C.body}${C.bold}${t}${C.reset}`
-      : `${C.pipelineDim}${t}${C.reset}`,
-  );
-  return fitLine(parts.join('   '), Math.max(20, cols));
-}
-
-/**
  * Small pill badge shown only while the model reasons between actions
  * (not during file writes). Understated: thin border, pulsing dot.
  */

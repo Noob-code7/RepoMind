@@ -28,8 +28,9 @@ import {
   type LlmStage,
 } from '../shared/llm_client.js';
 import type { FileManifest, GateDecision, PlanOutput, TestResults } from '../shared/types.js';
-import { emptyTestResults } from '../shared/types.js';
+import { emptyTestResults, totalFailed, totalPassed } from '../shared/types.js';
 import { ManifestStore, manifestPathFor } from '../orchestrator/manifest_store.js';
+import { statusCompleteness } from '../orchestrator/manifest_diff.js';
 import { DigestStore } from '../orchestrator/digest_store.js';
 import { LoopController, runRepairLoop } from '../orchestrator/loop_controller.js';
 import { planProject } from '../agents/planner/planner.js';
@@ -61,17 +62,52 @@ import {
   wrapVisual,
 } from './layout.js';
 import { HOME_SUGGESTIONS, renderHome, renderPipelineLine } from './home.js';
-import { availableModels, labelForModel, shortForModel } from './models.js';
+import {
+  availableModels,
+  labelForModel,
+  shortForModel,
+  friendlyName,
+  getDiscoveredLocalModels,
+  refreshAvailableModels,
+} from './models.js';
+import {
+  appendProjectMessage,
+  buildConversationContext,
+  loadProjectConversation,
+  clearProjectConversation,
+} from './conversation_store.js';
+import { dispatchInput } from './dispatcher.js';
+import { checkOllamaHealth, hasMockOllamaHandler } from '../shared/ollama_client.js';
+import { completeStream, hasMockHandler, isOllama } from '../shared/llm_client.js';
+import {
+  startAudioRecording,
+  stopAudioRecording,
+  transcribeAudio,
+  synthesizeSpeech,
+  playAudio,
+  stopAudioPlayback,
+} from '../shared/voice_service.js';
 import {
   defaultExecuteTasks,
   nowTs,
   renderActivityFeed,
   renderChecklist,
-  renderTabBar,
   renderThinkingBadge,
   renderTotalBar,
   type ActivityEvent,
 } from './execution_view.js';
+import {
+  emitHumanGateDecision,
+  emitReportGenerated,
+  emitStageCompleted,
+  emitStageStarted,
+  emitTestCompleted,
+  emitTestStarted,
+  emitVerificationCompleted,
+} from '../telemetry/index.js';
+import { AnalyticsService, analyticsService } from '../telemetry/analytics_service.js';
+import { formatRunSummaryText } from '../telemetry/summary_view.js';
+import { beginTuiRun, endTuiRun, type TuiRunScope } from './telemetry_session.js';
 
 const BRAID_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const HISTORY_FILE = join(homedir(), '.braid_history');
@@ -89,6 +125,8 @@ export interface TuiOptions {
   project?: string;
   prdPath?: string;
   smokeOnly?: boolean;
+  /** Initial mode to start in (defaults to chat or saved session). */
+  mode?: Mode;
   /** Escape hatch: render inline on the main screen instead of the alt screen. */
   noAltScreen?: boolean;
 }
@@ -194,6 +232,11 @@ export class TuiApp {
   private keyStream: EventEmitter | null = null;
   private rawStdinHandler: ((chunk: Buffer) => void) | null = null;
 
+  private voiceEnabled = false;
+  private isRecordingVoice = false;
+  private isTranscribingVoice = false;
+  private isPlayingVoice = false;
+
   private registerClick(
     row: number,
     colStart: number,
@@ -219,15 +262,22 @@ export class TuiApp {
     }
   }
 
+  private activeAbort: AbortController | null = null;
+
   constructor(opts: TuiOptions = {}) {
     const saved = loadSession();
-    this.mode = isValidMode(saved.mode) ? saved.mode : 'chat';
+    this.mode = opts.mode && isValidMode(opts.mode)
+      ? opts.mode
+      : isValidMode(saved.mode)
+        ? saved.mode
+        : 'chat';
     this.project = opts.project ?? saved.project ?? 'demo';
     this.prdPath = opts.prdPath ? resolve(opts.prdPath) : saved.prdPath;
     this.prdBuffer = saved.prdBuffer ?? '';
     this.feedback = saved.feedback;
     this.smokeOnly = opts.smokeOnly ?? saved.smokeOnly ?? false;
     this.chatModel = saved.chatModel ?? '';
+    this.voiceEnabled = saved.voiceEnabled ?? false;
     this.useAltScreen = !opts.noAltScreen;
     this.histIdx = this.history.length;
     if (this.prdPath && existsSync(this.prdPath) && !this.prdBuffer) {
@@ -240,6 +290,18 @@ export class TuiApp {
         this.prdBuffer = readFileSync(resolve(opts.prdPath), 'utf8').trim();
         this.prdPath = resolve(opts.prdPath);
       } catch { /* ignore */ }
+    }
+    this.loadProjectMessages();
+    void refreshAvailableModels().catch(() => {});
+  }
+
+  private loadProjectMessages(): void {
+    const saved = loadProjectConversation(this.project, config.generatedRoot);
+    if (saved.length > 0) {
+      for (const m of saved) {
+        this.messages.push({ role: m.role, text: m.content, mode: m.mode });
+      }
+      this.scrollOffset = 0;
     }
   }
 
@@ -257,6 +319,7 @@ export class TuiApp {
       smokeOnly: this.smokeOnly,
       mode: this.mode,
       chatModel: this.chatModel || undefined,
+      voiceEnabled: this.voiceEnabled,
       updatedAt: new Date().toISOString(),
     });
   }
@@ -266,6 +329,26 @@ export class TuiApp {
     if (this.chatModel) return this.chatModel;
     try {
       return effectiveModel('chat');
+    } catch {
+      return config.chatModel;
+    }
+  }
+
+  /** Active model id for a given mode (or the currently selected mode). */
+  activeModelForMode(mode: Mode = this.mode): string {
+    if (mode === 'chat') {
+      return this.activeChatModel();
+    }
+    const stageMap: Record<Mode, LlmStage> = {
+      chat: 'chat',
+      plan: 'plan',
+      review: 'review',
+      build: 'execute',
+      debug: 'triage',
+      report: 'report',
+    };
+    try {
+      return effectiveModel(stageMap[mode]);
     } catch {
       return config.chatModel;
     }
@@ -494,7 +577,6 @@ export class TuiApp {
     const execPanel = this.buildExecPanel(L.contentWidth);
     const execHeight = execPanel.length;
     const execNoteHeight = this.isExecuting() ? 1 : 0;
-    const TAB_HEIGHT = 1;
     // Bordered input: top + up to 6 content rows + bottom. The box shares
     // the conversation's left edge (never centered independently).
     const inputLogical = this.buffer.split('\n');
@@ -519,7 +601,7 @@ export class TuiApp {
     const statusHeight = 1;
     const hintHeight = cols >= 70 ? 1 : 0;
     const chromeHeight =
-      TAB_HEIGHT + pipelineHeight + detailHeight + execHeight + approvalHeight +
+      pipelineHeight + detailHeight + execHeight + approvalHeight +
       modeMenuHeight + menuHeight + modelMenuHeight +
       inputBoxHeight + execNoteHeight + statusHeight + hintHeight + 1;
     const convHeight = Math.max(4, rows - chromeHeight);
@@ -598,9 +680,9 @@ export class TuiApp {
     const start = Math.max(0, end - convHeight);
     const visible = conv.slice(start, end);
     // Resolve deferred home clicks to 1-based frame rows (scroll-aware).
-    // +1 for the persistent tab bar row above the conversation.
+    // +1 because the conversation starts on the first frame row.
     for (const hc of homeClicks) {
-      const row = hc.idx - start + 1 + TAB_HEIGHT;
+      const row = hc.idx - start + 1;
       if (row >= 1 && row <= visible.length) this.registerClick(row, hc.c0, hc.c1, hc.fn);
     }
 
@@ -620,8 +702,6 @@ export class TuiApp {
     }
     s += '\x1b[H';
     const chrome = (content: string): string => fitLine(M + content, cols - L.rightMargin);
-    // 1. Minimal tab bar (Problems · Output · Debug Console · Terminal active).
-    s += chrome(renderTabBar(L.contentWidth)) + '\n';
     s += visible.join('\n');
     if (visible.length < convHeight) s += '\n'.repeat(convHeight - visible.length);
     s += '\n';
@@ -733,8 +813,88 @@ export class TuiApp {
     const boxWidth = L.boxWidth;
     const innerWidth = L.innerWidth;
     const topLabel = ` ${C.modeMagentaBold}${this.mode}${C.reset} `;
-    const topFill = Math.max(0, boxWidth - 2 - displayWidth(topLabel));
-    s += `${pad}${C.inputBorder}${BOX.tl}${C.reset}${topLabel}${C.inputBorder}${BOX.h.repeat(topFill)}${BOX.tr}${C.reset}\n`;
+
+    // Interactive Voice Toggle & Record badges on top border
+    const topBorderRow = s.split('\n').length;
+    let voiceBadgesStyled = '';
+    let voiceBadgesWidth = 0;
+
+    if (this.isRecordingVoice) {
+      const label = ' [🔴 REC - Click to Send] ';
+      const w = displayWidth(label);
+      if (boxWidth >= 45) {
+        voiceBadgesWidth = w;
+        voiceBadgesStyled = `${C.red}${C.bold}${label}${C.reset}`;
+        const colStart = M.length + boxWidth - w;
+        const colEnd = M.length + boxWidth - 1;
+        this.registerClick(topBorderRow, colStart, colEnd, () => {
+          void this.finishVoiceRecordingAndSubmit();
+        });
+      }
+    } else if (this.isTranscribingVoice) {
+      const label = ' [⏳ Transcribing...] ';
+      const w = displayWidth(label);
+      if (boxWidth >= 45) {
+        voiceBadgesWidth = w;
+        voiceBadgesStyled = `${C.amber}${C.bold}${label}${C.reset}`;
+      }
+    } else if (this.isPlayingVoice) {
+      const label = ' [🔊 Speaking - Click to Mute] ';
+      const w = displayWidth(label);
+      if (boxWidth >= 45) {
+        voiceBadgesWidth = w;
+        voiceBadgesStyled = `${C.green}${C.bold}${label}${C.reset}`;
+        const colStart = M.length + boxWidth - w;
+        const colEnd = M.length + boxWidth - 1;
+        this.registerClick(topBorderRow, colStart, colEnd, () => {
+          this.stopSpeaking();
+        });
+      }
+    } else if (this.voiceEnabled) {
+      const recLabel = ' [🔴 Speak] ';
+      const voiceLabel = '[🎙️ Voice: ON] ';
+      const wRec = displayWidth(recLabel);
+      const wVoice = displayWidth(voiceLabel);
+      if (boxWidth >= 65) {
+        voiceBadgesWidth = wRec + wVoice;
+        voiceBadgesStyled = `${C.red}${C.bold}${recLabel}${C.reset}${C.green}${C.bold}${voiceLabel}${C.reset}`;
+        const recStart = M.length + boxWidth - voiceBadgesWidth;
+        const recEnd = recStart + wRec - 1;
+        const voiceStart = recEnd + 1;
+        const voiceEnd = M.length + boxWidth - 1;
+        this.registerClick(topBorderRow, recStart, recEnd, () => {
+          void this.startVoiceCapture();
+        });
+        this.registerClick(topBorderRow, voiceStart, voiceEnd, () => {
+          void this.toggleVoiceAction();
+        });
+      } else if (boxWidth >= 45) {
+        const singleLabel = ' [🎙️ Voice: ON] ';
+        const w = displayWidth(singleLabel);
+        voiceBadgesWidth = w;
+        voiceBadgesStyled = `${C.green}${C.bold}${singleLabel}${C.reset}`;
+        const colStart = M.length + boxWidth - w;
+        const colEnd = M.length + boxWidth - 1;
+        this.registerClick(topBorderRow, colStart, colEnd, () => {
+          void this.toggleVoiceAction();
+        });
+      }
+    } else {
+      const label = ' [🎙️ Voice: OFF] ';
+      const w = displayWidth(label);
+      if (boxWidth >= 45) {
+        voiceBadgesWidth = w;
+        voiceBadgesStyled = `${C.pipelineDim}${label}${C.reset}`;
+        const colStart = M.length + boxWidth - w;
+        const colEnd = M.length + boxWidth - 1;
+        this.registerClick(topBorderRow, colStart, colEnd, () => {
+          void this.toggleVoiceAction();
+        });
+      }
+    }
+
+    const topFill = Math.max(0, boxWidth - 2 - displayWidth(topLabel) - voiceBadgesWidth);
+    s += `${pad}${C.inputBorder}${BOX.tl}${C.reset}${topLabel}${C.inputBorder}${BOX.h.repeat(topFill)}${C.reset}${voiceBadgesStyled}${C.inputBorder}${BOX.tr}${C.reset}\n`;
     const isEmpty = this.buffer.length === 0;
     visual.forEach((vline, vi) => {
       const content = isEmpty && vi === 0
@@ -750,13 +910,16 @@ export class TuiApp {
     }
 
     // Reference-chat footer: blue-gray status line + dimmer hint line.
-    const modelLabel = shortForModel(chatModel);
+    const currentModeModel = this.activeModelForMode(this.mode);
+    const modelLabel = shortForModel(currentModeModel);
     const status = statusStrip({ cols: L.contentWidth, model: modelLabel, project: this.project, mode: this.mode });
     const modelHint = cols >= 90 ? ` ${C.pipelineDim}(Ctrl+P)${C.reset}` : '';
+    const voiceStatus = this.voiceEnabled ? ` ${C.green}[🎙️ voice]${C.reset}` : '';
     const scrolled = this.scrollOffset > 0 ? ` ${C.amber}[▲ ${this.scrollOffset}]${C.reset}` : '';
-    s += chrome(`${status}${modelHint}${scrolled}`) + '\n';
+    s += chrome(`${status}${modelHint}${voiceStatus}${scrolled}`) + '\n';
     if (hintHeight) {
-      s += chrome(`${C.footerDim}Enter send · Ctrl+J newline · Tab mode · Ctrl+C ${this.busy ? 'cancel' : 'exit'}${C.reset}`) + '\n';
+      const voiceHint = this.voiceEnabled ? ' · Ctrl+V speak' : ' · Ctrl+V voice';
+      s += chrome(`${C.footerDim}Enter send · Ctrl+J newline · Tab mode${voiceHint} · Ctrl+C ${this.busy ? 'cancel' : 'exit'}${C.reset}`) + '\n';
     }
 
     // Every reset above drops the background — re-assert it after each
@@ -902,8 +1065,15 @@ export class TuiApp {
     if (this.cancelRequested) throw new Cancelled('Cancelled.');
   }
 
-  private async actPlan(): Promise<void> {
+  private async actPlan(prompt?: string): Promise<void> {
+    if (prompt?.trim()) {
+      this.prdBuffer = prompt.trim();
+      this.persist();
+    }
     const prd = this.prdText();
+    const tScope = beginTuiRun(this.project, { smokeOnly: this.smokeOnly });
+    const planStart = Date.now();
+    emitStageStarted('plan', { runId: tScope.runId, modelUsed: config.planModel });
     this.setStage('plan', 'running');
     this.push('progress', `Planning **${this.project}** (${prd.length} chars PRD)…`);
     // Persist PRD so artifacts stay reproducible.
@@ -917,14 +1087,43 @@ export class TuiApp {
       );
       this.checkCancel();
       let review;
+      const reviewStart = Date.now();
+      emitStageStarted('review', { runId: tScope.runId, modelUsed: config.reviewModel });
       try {
         this.setStage('review', 'running');
         review = await this.withBusy('reviewing', () => reviewPlan(prd, plan));
         this.setStage('review', 'completed');
+        emitStageCompleted('review', {
+          runId: tScope.runId,
+          durationMs: Date.now() - reviewStart,
+          modelUsed: config.reviewModel,
+          payload: {
+            riskScore: review.riskScore,
+            risksCount: review.risks.length,
+            critiquesCount: review.critiques.length,
+          },
+        });
       } catch (err) {
         review = { critiques: [], risks: [`review unavailable: ${(err as Error).message}`], riskScore: 0.5 };
         this.setStage('review', 'completed');
+        emitStageCompleted('review', {
+          runId: tScope.runId,
+          durationMs: Date.now() - reviewStart,
+          modelUsed: config.reviewModel,
+          severity: 'warn',
+          payload: { riskScore: 0.5, error: (err as Error).message },
+        });
       }
+      emitStageCompleted('plan', {
+        runId: tScope.runId,
+        durationMs: Date.now() - planStart,
+        modelUsed: config.planModel,
+        payload: {
+          tasksCount: plan.taskGraph.nodes.length,
+          filesCount: plan.manifest.files.length,
+          stubsCount: plan.testStubs.length,
+        },
+      });
       writeFileSync(join(this.outDir(), 'plan.json'), JSON.stringify(plan, null, 2) + '\n');
       new ManifestStore(manifestPathFor(resolve(config.generatedRoot), this.project), plan.manifest);
       this.setStage('plan', 'completed');
@@ -934,6 +1133,7 @@ export class TuiApp {
       const decision = await this.askApproval('Gate 1 — approve plan?', formatPlanSummary(plan, review));
       if (decision === null) {
         this.push('system', 'Gate 1 cancelled — plan kept, no code written.');
+        await endTuiRun(tScope, 'rejected_gate1');
         return;
       }
       let gate: GateDecision;
@@ -941,36 +1141,70 @@ export class TuiApp {
         gate = decideGateReview(decision.approved, decision.feedback);
       } catch (err) {
         this.push('error', (err as Error).message);
+        await endTuiRun(tScope, 'failed', (err as Error).message);
         return;
       }
+      emitHumanGateDecision({
+        gate: 1,
+        gateName: 'gate_review',
+        approved: gate.approved,
+        hasFeedback: Boolean(gate.feedback),
+        feedbackLength: gate.feedback?.length,
+        autoApproved: this.autoApproveGates,
+        runId: tScope.runId,
+      });
       if (!gate.approved) {
         this.feedback = gate.feedback;
         writeFileSync(join(this.outDir(), 'gate1-feedback.txt'), (gate.feedback ?? '') + '\n');
         this.push('system', `Gate 1: revisions requested.\n\n${gate.feedback}\n\nRe-run \`/plan\` — feedback is folded into the next pass.`);
         this.persist();
+        await endTuiRun(tScope, 'rejected_gate1');
       } else {
         this.feedback = undefined;
         this.push('system', 'Gate 1: **approved** — `/build` will now write code.');
         this.persist();
+        await endTuiRun(tScope, 'completed');
       }
     } catch (err) {
       if (err instanceof Cancelled) {
         this.setStage('plan', 'pending');
         this.push('system', 'Planning cancelled.');
+        await endTuiRun(tScope, 'failed', 'cancelled');
       } else {
         this.setStage('plan', 'failed');
         this.push('error', `Plan failed: ${(err as Error).message}`);
+        await endTuiRun(tScope, 'failed', (err as Error).message);
       }
     }
   }
 
   private async actReview(): Promise<void> {
+    const planFile = join(this.outDir(), 'plan.json');
+    if (!existsSync(planFile)) {
+      this.push('assistant', '⚠️ **No plan to review**.\n\nSwitch to **Plan mode** (press `Tab`) and generate a plan first, or run `/plan`.', 'review');
+      return;
+    }
+    let tScope: TuiRunScope | null = null;
     try {
-      const plan = this.readJson<PlanOutput>(join(this.outDir(), 'plan.json'), 'plan');
+      const plan = this.readJson<PlanOutput>(planFile, 'plan');
       const prd = this.prdText();
+      tScope = beginTuiRun(this.project, { smokeOnly: this.smokeOnly });
+      const reviewStart = Date.now();
+      emitStageStarted('review', { runId: tScope.runId, modelUsed: config.reviewModel });
       this.setStage('review', 'running');
       const review = await this.withBusy('reviewing', () => reviewPlan(prd, plan));
       this.setStage('review', 'completed');
+      emitStageCompleted('review', {
+        runId: tScope.runId,
+        durationMs: Date.now() - reviewStart,
+        modelUsed: config.reviewModel,
+        payload: {
+          riskScore: review.riskScore,
+          risksCount: review.risks.length,
+          critiquesCount: review.critiques.length,
+        },
+      });
+      await endTuiRun(tScope, 'completed');
       this.push(
         'assistant',
         `## Review — risk ${review.riskScore.toFixed(2)}\n\n` +
@@ -980,6 +1214,7 @@ export class TuiApp {
         this.mode,
       );
     } catch (err) {
+      if (tScope) await endTuiRun(tScope, 'failed', err instanceof Cancelled ? 'cancelled' : (err as Error).message);
       if (err instanceof Cancelled) this.push('system', 'Review cancelled.');
       else {
         this.setStage('review', 'failed');
@@ -989,9 +1224,30 @@ export class TuiApp {
   }
 
   private async actBuild(): Promise<void> {
+    const planFile = join(this.outDir(), 'plan.json');
+    if (!existsSync(planFile)) {
+      this.push(
+        'assistant',
+        '⚠️ **Cannot execute build**: No plan exists yet.\n\nSwitch to **Plan mode** (press `Tab`) and submit your requirements to generate a plan first.',
+        'build',
+      );
+      return;
+    }
+    if (this.pipeline.plan !== 'completed' || this.feedback) {
+      this.push(
+        'assistant',
+        '⚠️ **Execution blocked**: The plan has not been approved at Gate 1.\n\nReview the plan and approve it before building code, or run `/plan` to revise.',
+        'build',
+      );
+      return;
+    }
+    let tScope: TuiRunScope | null = null;
     try {
       const store = ManifestStore.load(manifestPathFor(resolve(config.generatedRoot), this.project));
       const total = store.list().length;
+      tScope = beginTuiRun(this.project, { smokeOnly: this.smokeOnly });
+      const execStart = Date.now();
+      emitStageStarted('execute', { runId: tScope.runId, modelUsed: config.executeModel });
       this.setStage('execute', 'running');
       this.execEvents = [];
       this.execThinking = false;
@@ -1030,9 +1286,20 @@ export class TuiApp {
       const done = store.byStatus('implemented');
       this.execThinking = false;
       this.setStage('execute', 'completed');
+      emitStageCompleted('execute', {
+        runId: tScope.runId,
+        durationMs: Date.now() - execStart,
+        modelUsed: config.executeModel,
+        payload: {
+          implementedCount: done.length,
+          totalCount: store.snapshot().files.length,
+        },
+      });
+      await endTuiRun(tScope, 'completed');
       this.push('assistant', `## Build complete\n\nImplemented (${done.length}/${total}):\n${done.map((f) => `- \`${f}\``).join('\n')}`, this.mode);
       this.persist();
     } catch (err) {
+      if (tScope) await endTuiRun(tScope, 'failed', err instanceof Cancelled ? 'cancelled' : (err as Error).message);
       if (err instanceof Cancelled) {
         this.setStage('execute', 'pending');
         this.push('system', 'Build cancelled.');
@@ -1044,13 +1311,23 @@ export class TuiApp {
   }
 
   private async actDebug(): Promise<void> {
+    let tScope: TuiRunScope | null = null;
     try {
       const projectRoot = this.outDir();
       const store = ManifestStore.load(manifestPathFor(resolve(config.generatedRoot), this.project));
       const plan = this.readJson<PlanOutput>(join(projectRoot, 'plan.json'), 'plan');
+      tScope = beginTuiRun(this.project, { smokeOnly: this.smokeOnly });
+      const debugStart = Date.now();
+      emitStageStarted('debug', { runId: tScope.runId, modelUsed: config.triageModel });
+      emitTestStarted({
+        runId: tScope.runId,
+        testType: this.smokeOnly ? 'smoke' : 'all',
+        stubsCount: plan.testStubs.length,
+      });
       this.setStage('debug', 'running');
       this.push('progress', `Running test suite for **${this.project}**…`);
       let results: TestResults;
+      let repairAttempts = 0;
       if (this.smokeOnly) {
         const missing = store.snapshot().files.filter((f) => !existsSync(join(projectRoot, f.path)));
         results = { ...emptyTestResults(), smoke: missing.length === 0 ? { passed: 1, failed: 0 } : { passed: 0, failed: missing.length } };
@@ -1080,10 +1357,43 @@ export class TuiApp {
             }),
           );
           results = repaired.results;
+          repairAttempts = repaired.attempts;
           this.push('tool', `Repair: ${repaired.attempts} attempt(s), converged=${repaired.converged}`);
         }
       }
       writeFileSync(join(projectRoot, 'results.json'), JSON.stringify(results, null, 2) + '\n');
+      const totalFail = results.smoke.failed + results.stubs.failed + results.regression.failed;
+      emitTestCompleted({
+        runId: tScope.runId,
+        smokePassed: results.smoke.passed,
+        smokeFailed: results.smoke.failed,
+        stubsPassed: results.stubs.passed,
+        stubsFailed: results.stubs.failed,
+        regressionPassed: results.regression.passed,
+        regressionFailed: results.regression.failed,
+      });
+      emitVerificationCompleted({
+        runId: tScope.runId,
+        status: totalFail === 0 ? 'passed' : 'failed',
+        smokePassed: results.smoke.passed,
+        smokeFailed: results.smoke.failed,
+        stubsPassed: results.stubs.passed,
+        stubsFailed: results.stubs.failed,
+        manifestCompleteness: statusCompleteness(store.snapshot()),
+        repairAttempts,
+        converged: totalFail === 0,
+      });
+      emitStageCompleted('debug', {
+        runId: tScope.runId,
+        durationMs: Date.now() - debugStart,
+        modelUsed: config.triageModel,
+        payload: {
+          totalPassed: totalPassed(results),
+          totalFailed: totalFail,
+          repairAttempts,
+        },
+      });
+      await endTuiRun(tScope, 'completed');
       this.setStage('debug', results.smoke.failed + results.stubs.failed > 0 ? 'failed' : 'completed');
       this.push(
         'assistant',
@@ -1091,6 +1401,7 @@ export class TuiApp {
         this.mode,
       );
     } catch (err) {
+      if (tScope) await endTuiRun(tScope, 'failed', err instanceof Cancelled ? 'cancelled' : (err as Error).message);
       if (err instanceof Cancelled) {
         this.setStage('debug', 'pending');
         this.push('system', 'Debug cancelled.');
@@ -1102,6 +1413,7 @@ export class TuiApp {
   }
 
   private async actReport(): Promise<void> {
+    let tScope: TuiRunScope | null = null;
     try {
       const projectRoot = this.outDir();
       const store = ManifestStore.load(manifestPathFor(resolve(config.generatedRoot), this.project));
@@ -1112,6 +1424,9 @@ export class TuiApp {
         results = { ...emptyTestResults(), smoke: { passed: 1, failed: 0 } };
       }
       const prd = this.prdText();
+      tScope = beginTuiRun(this.project, { smokeOnly: this.smokeOnly });
+      const reportStart = Date.now();
+      emitStageStarted('report', { runId: tScope.runId, modelUsed: config.reportModel });
       this.setStage('report', 'running');
       const report = await this.withBusy('reporting', () =>
         generateReport({
@@ -1124,11 +1439,28 @@ export class TuiApp {
       );
       writeFileSync(join(projectRoot, 'report.json'), JSON.stringify(report, null, 2) + '\n');
       this.setStage('report', 'completed');
+      emitReportGenerated({
+        runId: tScope.runId,
+        manifestCompleteness: report.manifestCompleteness,
+        totalPassed: totalPassed(report.testResults),
+        totalFailed: totalFailed(report.testResults),
+        prdCoverageImplemented: report.prdCoverage.filter((c) => c.status === 'implemented').length,
+        prdCoverageTotal: report.prdCoverage.length,
+        flaggedRisksCount: report.flaggedRisks.length,
+        durationMs: Date.now() - reportStart,
+        modelUsed: config.reportModel,
+      });
+      emitStageCompleted('report', {
+        runId: tScope.runId,
+        durationMs: Date.now() - reportStart,
+        modelUsed: config.reportModel,
+      });
       this.push('assistant', `## Report\n\n${formatReportSummary(report)}`, this.mode);
       // Explicit Gate 2.
       const decision = await this.askApproval('Gate 2 — satisfied?', formatReportSummary(report));
       if (decision === null) {
         this.push('system', 'Gate 2 cancelled — report kept.');
+        await endTuiRun(tScope, 'rejected_gate2');
         return;
       }
       let gate: GateDecision;
@@ -1136,18 +1468,31 @@ export class TuiApp {
         gate = decideGateReport(decision.approved, decision.feedback);
       } catch (err) {
         this.push('error', (err as Error).message);
+        await endTuiRun(tScope, 'failed', (err as Error).message);
         return;
       }
+      emitHumanGateDecision({
+        gate: 2,
+        gateName: 'gate_report',
+        approved: gate.approved,
+        hasFeedback: Boolean(gate.feedback),
+        feedbackLength: gate.feedback?.length,
+        autoApproved: this.autoApproveGates,
+        runId: tScope.runId,
+      });
       if (!gate.approved) {
         this.feedback = gate.feedback;
         writeFileSync(join(projectRoot, 'gate2-feedback.txt'), (gate.feedback ?? '') + '\n');
         this.push('system', `Gate 2: looping back to plan.\n\n${gate.feedback}\n\nRun \`/plan\` — feedback is folded into the next pass.`);
         this.setStage('plan', 'pending');
         this.persist();
+        await endTuiRun(tScope, 'rejected_gate2');
       } else {
         this.push('system', '**Done.** Feature accepted at Gate 2.');
+        await endTuiRun(tScope, 'completed');
       }
     } catch (err) {
+      if (tScope) await endTuiRun(tScope, 'failed', err instanceof Cancelled ? 'cancelled' : (err as Error).message);
       if (err instanceof Cancelled) {
         this.setStage('report', 'pending');
         this.push('system', 'Report cancelled.');
@@ -1159,12 +1504,53 @@ export class TuiApp {
   }
 
   private async actRunFull(): Promise<void> {
+    // Own one run for the whole chain — sub-actions join it via beginTuiRun.
+    const scope = beginTuiRun(this.project, { smokeOnly: this.smokeOnly });
     await this.actPlan();
-    if (this.pipeline.plan !== 'completed') return;
+    if (this.pipeline.plan !== 'completed') {
+      await endTuiRun(scope, this.feedback ? 'rejected_gate1' : 'failed');
+      return;
+    }
     await this.actBuild();
-    if (this.pipeline.execute !== 'completed') return;
+    if (this.pipeline.execute !== 'completed') {
+      await endTuiRun(scope, 'failed');
+      return;
+    }
     await this.actDebug();
     await this.actReport();
+    await endTuiRun(scope, this.pipeline.report === 'completed' ? 'completed' : 'failed');
+  }
+
+  /** Read-only: render one recorded run (or usage) as a tool message. Never throws. */
+  private async showTelemetry(arg: string | undefined, service: AnalyticsService = analyticsService): Promise<void> {
+    const runId = (arg ?? '').trim().split(/\s+/)[0] ?? '';
+    if (!service.isEnabled) {
+      this.push(
+        'tool',
+        '**telemetry** — disabled. Set `TIGER_DATABASE_URL` (and optionally `TIGER_TELEMETRY_ENABLED=true`) to record run history.',
+      );
+      return;
+    }
+    if (!runId) {
+      this.push('error', 'Usage: `/telemetry <run-id>`');
+      return;
+    }
+    try {
+      const summary = await service.getRunSummary(runId);
+      if (!summary) {
+        this.push('tool', `**telemetry** — no data for run \`${runId}\`.`);
+        return;
+      }
+      const [stages, tests, files, coverage] = await Promise.all([
+        service.getStagePerformance(runId),
+        service.getTestMetrics(runId),
+        service.getFileGenerationMetrics(runId),
+        service.getPrdCoverage(runId),
+      ]);
+      this.push('tool', `**telemetry — run ${runId}**\n\n${formatRunSummaryText({ summary, stages, tests, files, coverage })}`);
+    } catch (err) {
+      this.push('error', `Telemetry lookup failed: ${(err as Error).message}`);
+    }
   }
 
   /** Diagnostics view — full detail lives here, NOT in the default strip. */
@@ -1219,10 +1605,20 @@ export class TuiApp {
     const parts = arg.trim().split(/\s+/).filter(Boolean);
     const chatId = this.activeChatModel();
     if (parts.length === 0) {
+      await refreshAvailableModels();
+      const localModels = getDiscoveredLocalModels();
+      const localSection =
+        localModels.length > 0
+          ? `\n**Local Ollama models discovered:**\n` +
+            localModels.map((m) => `- \`${m}\` (${friendlyName(m)})`).join('\n') +
+            '\n'
+          : '\n_No local Ollama models discovered yet (run `ollama serve`)._\n';
       this.push(
         'tool',
         '**Models**\n' +
           `chat → ${chatId} (${labelForModel(chatId)}) — Ctrl+P or \`/model chat <name>\`\n` +
+          localSection +
+          '\n**Configured Stage Models:**\n' +
           STAGES.map((s, i) => `${i + 1}. \`${s}\` → ${effectiveModel(s)}`).join('\n') +
           '\n\nUsage: `/model chat <name>` · `/model <slot|1-5> <name>` · `/model <slot> reset`',
       );
@@ -1319,78 +1715,250 @@ export class TuiApp {
           this.prdBuffer = readFileSync(resolve(maybePath), 'utf8').trim();
           this.prdPath = resolve(maybePath);
           this.persist();
-          this.push('assistant', `Loaded PRD from \`${maybePath}\` (${this.prdBuffer.length} chars). Ask me anything about it, or run \`/plan\` to generate the task graph + manifest.`, 'chat');
+          this.push('assistant', `Loaded PRD from \`${maybePath}\` (${this.prdBuffer.length} chars). Ask me anything about it, or switch to Plan mode (press \`Tab\`) to generate the task graph + manifest.`, 'chat');
           return;
         }
       } catch { /* fall through to normal chat */ }
     }
     if (!trimmed) {
-      this.push('assistant', `**${this.mode}** mode — ${MODE_HINTS[this.mode]}\n\n${this.prdBuffer ? `PRD buffer: ${this.prdBuffer.length} chars.` : 'No PRD buffered yet. Paste requirements or `/prd <file>`, or just ask a question.'}`, 'chat');
+      this.push('assistant', `**${this.mode}** mode — ${MODE_DESCRIPTIONS[this.mode]}\n\n${this.prdBuffer ? `PRD buffer: ${this.prdBuffer.length} chars.` : 'No PRD buffered yet. Paste requirements or ask any programming question.'}`, 'chat');
       return;
     }
-    // Long inputs in chat mode also accumulate PRD context (folded into /plan).
-    let accumulated = false;
-    if (this.mode === 'chat' && trimmed.length > 40 && !trimmed.startsWith('/')) {
-      this.prdBuffer += (this.prdBuffer ? '\n' : '') + trimmed;
-      this.persist();
-      accumulated = true;
+
+    const activeModel = this.activeChatModel();
+    if (isOllama(activeModel) && !hasMockOllamaHandler() && !hasMockHandler()) {
+      const health = await checkOllamaHealth();
+      if (!health.available) {
+        this.push('error', `⚠️ **Ollama unavailable**: ${health.error ?? 'Connection failed'}\n\nPlease start Ollama with \`ollama serve\` or check your connection.`);
+        return;
+      }
     }
-    const userPrompt = [
-      `Conversation so far:\n${this.buildChatHistory()}`,
-      '',
-      `User: ${trimmed}`,
-    ].join('\n');
+
+    this.push('user', trimmed, this.mode);
+    appendProjectMessage(this.project, {
+      role: 'user',
+      content: trimmed,
+      mode: this.mode,
+    }, config.generatedRoot);
+
+    // Extract project context summaries
+    let manifestSummary = '';
     try {
-      const reply = await this.withBusy('chatting', () =>
-        complete({
+      const mPath = manifestPathFor(resolve(config.generatedRoot), this.project);
+      if (existsSync(mPath)) {
+        const store = ManifestStore.load(mPath);
+        const files = store.list();
+        manifestSummary = files.map((f) => `- \`${f.path}\` [${f.status}]: ${f.purpose}`).join('\n');
+      }
+    } catch { /* ignore */ }
+
+    let testSummary = '';
+    try {
+      const resFile = join(this.outDir(), 'results.json');
+      if (existsSync(resFile)) {
+        testSummary = readFileSync(resFile, 'utf8');
+      }
+    } catch { /* ignore */ }
+
+    const contextMessages = buildConversationContext(this.project, {
+      prd: this.prdBuffer,
+      manifestSummary,
+      testSummary,
+      currentMode: this.mode,
+      generatedRoot: config.generatedRoot,
+    });
+
+    const systemPrompt = contextMessages.find((m) => m.role === 'system')?.content || this.buildChatSystemPrompt();
+    const historyPrompt = contextMessages
+      .filter((m) => m.role !== 'system')
+      .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
+      .join('\n\n');
+    const userPrompt = historyPrompt ? `${historyPrompt}\n\nUser: ${trimmed}` : `User: ${trimmed}`;
+
+    const abortController = new AbortController();
+    this.activeAbort = abortController;
+
+    const assistantMsg: ChatMessage = { role: 'assistant', text: '▍', mode: this.mode };
+    this.messages.push(assistantMsg);
+    this.scrollOffset = 0;
+    this.render();
+
+    let fullReply = '';
+    let renderTimer: NodeJS.Timeout | null = null;
+    const scheduleRender = () => {
+      if (!renderTimer) {
+        renderTimer = setTimeout(() => {
+          renderTimer = null;
+          assistantMsg.text = `${fullReply}▍`;
+          this.scrollOffset = 0;
+          this.render();
+        }, 40);
+      }
+    };
+
+    try {
+      await this.withBusy('thinking…', async () => {
+        await completeStream({
           stage: 'chat',
-          systemPrompt: this.buildChatSystemPrompt(),
+          systemPrompt,
           userPrompt,
-          maxTokens: 1500,
-          temperature: 0.4,
-        }),
-      );
-      this.checkCancel();
-      const suffix = accumulated ? `\n\n_PRD buffer is now **${this.prdBuffer.length}** chars (folded into the next \`/plan\`)._` : '';
-      await this.streamReply(`${reply.trim()}${suffix}`);
+          maxTokens: 2048,
+          temperature: 0.3,
+          signal: abortController.signal,
+          onToken: (tok) => {
+            fullReply += tok;
+            scheduleRender();
+          },
+        });
+      });
+
+      if (renderTimer) clearTimeout(renderTimer);
+      assistantMsg.text = fullReply.trim();
+      this.scrollOffset = 0;
+      this.render();
+
+      appendProjectMessage(this.project, {
+        role: 'assistant',
+        content: fullReply.trim(),
+        mode: this.mode,
+      }, config.generatedRoot);
+
+      if (this.voiceEnabled && fullReply.trim()) {
+        void this.speakReply(fullReply.trim());
+      }
     } catch (err) {
-      if (err instanceof Cancelled) {
+      if (renderTimer) clearTimeout(renderTimer);
+      const idx = this.messages.indexOf(assistantMsg);
+      if (idx !== -1) this.messages.splice(idx, 1);
+
+      if (err instanceof Cancelled || (err as Error).name === 'AbortError' || this.cancelRequested) {
         this.push('system', 'Chat cancelled.');
       } else {
-        this.push('error', `Chat failed: ${(err as Error).message}`);
+        const errorMsg = (err as Error).message || String(err);
+        this.push('error', `Chat failed: ${errorMsg}`);
       }
+    } finally {
+      this.activeAbort = null;
+    }
+  }
+
+  // -- voice interaction ---------------------------------------------------
+  isVoiceEnabled(): boolean {
+    return this.voiceEnabled;
+  }
+
+  isRecording(): boolean {
+    return this.isRecordingVoice;
+  }
+
+  async toggleVoiceAction(): Promise<void> {
+    if (this.isRecordingVoice) {
+      await this.finishVoiceRecordingAndSubmit();
+      return;
+    }
+    if (this.isPlayingVoice) {
+      this.stopSpeaking();
+      return;
+    }
+    this.voiceEnabled = !this.voiceEnabled;
+    this.persist();
+    if (this.voiceEnabled) {
+      this.push('system', 'voice mode → **ON** (ElevenLabs TTS + Voice input active. Click `[🔴 Speak]` or press `Ctrl+V` to record).');
+    } else {
+      this.push('system', 'voice mode → **OFF**');
+    }
+    this.render();
+  }
+
+  async startVoiceCapture(): Promise<void> {
+    if (this.isRecordingVoice || this.isTranscribingVoice) return;
+    try {
+      this.isRecordingVoice = true;
+      this.voiceEnabled = true;
+      this.push('system', '🎙️ **Listening...** Speak your message, then press `Enter` or click `[🔴 REC - Click to Send]` when done.');
+      this.render();
+      await startAudioRecording();
+    } catch (err) {
+      this.isRecordingVoice = false;
+      this.push('error', `Voice recording failed to start: ${(err as Error).message}`);
+      this.render();
+    }
+  }
+
+  async finishVoiceRecordingAndSubmit(): Promise<void> {
+    if (!this.isRecordingVoice) return;
+    this.isRecordingVoice = false;
+    this.isTranscribingVoice = true;
+    this.render();
+
+    try {
+      const audioPath = await stopAudioRecording();
+      if (!audioPath || !existsSync(audioPath)) {
+        this.isTranscribingVoice = false;
+        this.render();
+        return;
+      }
+      this.push('system', '⏳ Transcribing speech...');
+      this.render();
+      const text = await transcribeAudio(audioPath);
+      this.isTranscribingVoice = false;
+      if (!text || !text.trim()) {
+        this.push('system', 'No speech detected.');
+        this.render();
+        return;
+      }
+      this.buffer = text.trim();
+      this.setCursor(this.buffer.length);
+      this.render();
+      await this.submit();
+    } catch (err) {
+      this.isTranscribingVoice = false;
+      this.push('error', `Speech transcription failed: ${(err as Error).message}`);
+      this.render();
+    }
+  }
+
+  async cancelVoiceRecording(): Promise<void> {
+    if (!this.isRecordingVoice) return;
+    this.isRecordingVoice = false;
+    this.isTranscribingVoice = false;
+    try {
+      await stopAudioRecording();
+    } catch { /* ignore */ }
+    this.push('system', 'Voice recording cancelled.');
+    this.render();
+  }
+
+  async speakReply(text: string): Promise<void> {
+    if (!this.voiceEnabled || !text.trim()) return;
+    try {
+      this.isPlayingVoice = true;
+      this.render();
+      const audioBuffer = await synthesizeSpeech(text);
+      if (audioBuffer && audioBuffer.length > 0) {
+        await playAudio(audioBuffer);
+      }
+    } catch (err) {
+      const msg = (err as Error).message;
+      if (!msg.includes('cancelled') && !msg.includes('abort')) {
+        this.push('error', `Voice synthesis error: ${msg}`);
+      }
+    } finally {
+      this.isPlayingVoice = false;
+      this.render();
+    }
+  }
+
+  stopSpeaking(): void {
+    if (this.isPlayingVoice) {
+      stopAudioPlayback();
+      this.isPlayingVoice = false;
+      this.render();
     }
   }
 
   // -- command dispatch (shared by TUI, script and fallback paths) ---------
-  /** Returns false when the session should exit. */
-  async handleLine(raw: string, interactive: boolean): Promise<boolean> {
-    const line = raw.trim();
-    if (!line) {
-      await this.runCurrentMode(interactive);
-      return true;
-    }
-    if (!line.startsWith('/')) {
-      if (this.mode === 'plan' || this.mode === 'chat') {
-        this.push('user', raw, this.mode);
-        if (this.mode === 'plan') {
-          this.prdBuffer += (this.prdBuffer ? '\n' : '') + raw;
-          this.persist();
-          this.push('assistant', `PRD buffer: **${this.prdBuffer.length}** chars (Enter runs planner, \`/plan\` runs now).`, this.mode);
-        } else {
-          await this.actChat(raw);
-        }
-      } else {
-        this.feedback = raw;
-        this.persist();
-        this.push('user', raw, this.mode);
-        this.push('system', 'Saved as gate feedback for the next loop.');
-      }
-      return true;
-    }
-    const [cmdRaw, ...rest] = line.slice(1).split(/\s+/);
-    const cmd = (cmdRaw ?? '').toLowerCase();
-    const arg = rest.join(' ');
+  private async executeSlashCommand(cmd: string, arg: string): Promise<boolean> {
     switch (cmd) {
       case 'quit': case 'q': case 'exit': return false;
       case 'help': case 'h': case '?':
@@ -1401,6 +1969,7 @@ export class TuiApp {
       case 'files': this.showFiles(); return true;
       case 'clear':
         this.messages = [];
+        clearProjectConversation(this.project, config.generatedRoot);
         this.scrollOffset = 0;
         this.render();
         return true;
@@ -1441,22 +2010,64 @@ export class TuiApp {
         if (!arg) { this.push('error', 'Usage: `/project <name>`'); return true; }
         this.project = arg.split(/\s+/)[0]!;
         this.pipeline = initialPipeline();
+        this.messages = [];
+        this.loadProjectMessages();
         this.persist();
-        this.push('system', `project → **${this.project}** (pipeline reset to idle)`);
+        this.push('system', `project → **${this.project}** (pipeline reset to idle, conversation restored)`);
         return true;
       }
-      case 'plan': this.mode = 'plan'; this.persist(); await this.actPlan(); return true;
+      case 'plan': this.mode = 'plan'; this.persist(); await this.actPlan(arg); return true;
       case 'review': this.mode = 'review'; this.persist(); await this.actReview(); return true;
       case 'build': case 'execute': this.mode = 'build'; this.persist(); await this.actBuild(); return true;
       case 'test': await this.actDebug(); return true;
       case 'debug': this.mode = 'debug'; this.persist(); await this.actDebug(); return true;
       case 'report': this.mode = 'report'; this.persist(); await this.actReport(); return true;
       case 'run': await this.actRunFull(); return true;
+      case 'telemetry': await this.showTelemetry(arg); return true;
+      case 'voice': {
+        const lower = arg.trim().toLowerCase();
+        if (lower === 'on' || lower === 'enable') {
+          this.voiceEnabled = true;
+        } else if (lower === 'off' || lower === 'disable') {
+          this.voiceEnabled = false;
+          this.stopSpeaking();
+        } else {
+          this.voiceEnabled = !this.voiceEnabled;
+          if (!this.voiceEnabled) this.stopSpeaking();
+        }
+        this.persist();
+        this.push('system', `voice mode → ${this.voiceEnabled ? '**ON** (ElevenLabs TTS + Voice input active. Click `[🔴 Speak]` or press `Ctrl+V` to record)' : '**OFF**'}`);
+        this.render();
+        return true;
+      }
       default:
         this.push('error', `Unknown command \`/${cmd}\`. Type \`/help\` or \`/\` for the menu.`);
+        return true;
     }
-    void interactive;
-    return true;
+  }
+
+  // -- command dispatch (shared by TUI, script and fallback paths) ---------
+  /** Returns false when the session should exit. */
+  async handleLine(raw: string, interactive: boolean): Promise<boolean> {
+    const line = raw.trim();
+    if (!line) {
+      await this.runCurrentMode(interactive);
+      return true;
+    }
+    return dispatchInput(line, {
+      mode: this.mode,
+      project: this.project,
+      hasPlan: () => existsSync(join(this.outDir(), 'plan.json')),
+      isPlanApproved: () => this.pipeline.plan === 'completed' && !this.feedback && existsSync(join(this.outDir(), 'plan.json')),
+      actChat: (prompt) => this.actChat(prompt),
+      actPlan: (prompt) => this.actPlan(prompt),
+      actReview: () => this.actReview(),
+      actBuild: () => this.actBuild(),
+      actDebug: () => this.actDebug(),
+      actReport: () => this.actReport(),
+      handleSlashCommand: (cmd, arg) => this.executeSlashCommand(cmd, arg),
+      pushMessage: (role, text, mode) => this.push(role, text, mode),
+    });
   }
 
   private async runCurrentMode(interactive: boolean): Promise<void> {
@@ -1582,10 +2193,21 @@ export class TuiApp {
     done: () => void,
   ): Promise<void> {
     const name = key.name ?? '';
-    // Ctrl+C: cancel running op first, exit on double-press.
+    // Ctrl+C: cancel voice recording/playback first, or cancel running op, exit on double-press.
     if (key.ctrl && (name === 'c' || name === 'd')) {
+      if (this.isRecordingVoice) {
+        await this.cancelVoiceRecording();
+        return;
+      }
+      if (this.isPlayingVoice) {
+        this.stopSpeaking();
+        return;
+      }
       if (this.busy) {
         this.cancelRequested = true;
+        if (this.activeAbort) {
+          this.activeAbort.abort();
+        }
         this.push('system', 'Cancelling… (press Ctrl+C again to force-exit)');
         this.lastCtrlC = Date.now();
         return;
@@ -1664,6 +2286,14 @@ export class TuiApp {
       this.render();
       return;
     }
+    if (key.ctrl && name === 'v') {
+      if (this.isRecordingVoice) {
+        await this.finishVoiceRecordingAndSubmit();
+      } else {
+        await this.startVoiceCapture();
+      }
+      return;
+    }
     // Home suggestions — keyboard-selectable, never clobber typed input.
     if (this.suggestionsActive()) {
       if (ch === '1' || ch === '2' || ch === '3' || ch === '4') {
@@ -1688,6 +2318,10 @@ export class TuiApp {
     }
     switch (name) {
       case 'return': {
+        if (this.isRecordingVoice) {
+          await this.finishVoiceRecordingAndSubmit();
+          return;
+        }
         if (menuOpen) { this.completeMenu(menu); return; }
         if (this.suggestionsActive()) {
           // Enter on empty input activates the highlighted suggestion.
@@ -1700,6 +2334,14 @@ export class TuiApp {
         return;
       }
       case 'escape':
+        if (this.isRecordingVoice) {
+          await this.cancelVoiceRecording();
+          return;
+        }
+        if (this.isPlayingVoice) {
+          this.stopSpeaking();
+          return;
+        }
         this.menuDismissed = true;
         this.scrollOffset = 0;
         this.modelMenuOpen = false;
@@ -1890,32 +2532,11 @@ export class TuiApp {
       this.push('user', `\`${line.trim()}\``, this.mode);
     } else {
       this.push('user', line, this.mode);
-      // Route natural-language prompts without double-echo: handle inline.
-      if (this.mode === 'plan' || this.mode === 'chat' || !isSlashLike(line)) {
-        try {
-          // Re-dispatch through handleLine would re-push; inline instead.
-          if (!line.trim().startsWith('/')) {
-            if (this.mode === 'plan') {
-              this.prdBuffer += (this.prdBuffer ? '\n' : '') + line;
-              this.persist();
-              this.push('assistant', `PRD buffer: **${this.prdBuffer.length}** chars (Enter runs planner, \`/plan\` runs now).`, this.mode);
-            } else if (this.mode === 'chat') {
-              // Remove the echo duplicate? Keep echo — actChat appends reply.
-              this.messages.pop(); // drop generic echo, actChat pushes user+reply
-              this.push('user', line, this.mode);
-              await this.actChat(line);
-            } else {
-              this.feedback = line.trim();
-              this.persist();
-              this.push('system', 'Saved as gate feedback for the next loop.');
-            }
-            return;
-          }
-        } catch (err) {
-          this.push('error', (err as Error).message);
-          return;
-        }
-      }
+      appendProjectMessage(
+        this.project,
+        { role: 'user', content: line, mode: this.mode },
+        config.generatedRoot,
+      );
     }
     try {
       const keepGoing = await this.handleLine(line, true);
@@ -1933,6 +2554,10 @@ export class TuiApp {
   private teardown(): void {
     if (this.teardownDone) return;
     this.teardownDone = true;
+    this.stopSpeaking();
+    if (this.isRecordingVoice) {
+      void stopAudioRecording().catch(() => {});
+    }
     if (this.spinnerTimer) clearInterval(this.spinnerTimer);
     this.spinnerTimer = null;
     if (this.resizeHandler) process.stdout.off('resize', this.resizeHandler);
@@ -1962,22 +2587,7 @@ export class TuiApp {
   private async handleLineHeadless(raw: string): Promise<boolean> {
     const line = raw.trim();
     if (!line || line.startsWith('#')) return true;
-    if (!line.startsWith('/')) {
-      if (this.mode === 'plan' || this.mode === 'chat') {
-        this.messages.push({ role: 'user', text: raw, mode: this.mode });
-        if (this.mode === 'plan') {
-          this.prdBuffer += (this.prdBuffer ? '\n' : '') + raw;
-          this.persist();
-        } else {
-          await this.actChatHeadless(raw);
-        }
-        return true;
-      }
-      this.feedback = raw;
-      this.persist();
-      return true;
-    }
-    return this.handleLineAuto(raw);
+    return this.handleLine(raw, false);
   }
 
   private async actChatHeadless(text: string): Promise<void> {
@@ -2028,21 +2638,19 @@ export async function runFallback(app: TuiApp): Promise<void> {
   console.log('Braid (non-interactive stdin — Tab unavailable, use /mode; gates auto-approve).');
   console.log(WELCOME);
   const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const ask = (): Promise<string | null> =>
-    new Promise((resolve) => {
-      rl.question(`[${app.snapshot.mode}] > `, (answer) => resolve(answer));
-      rl.once('close', () => resolve(null));
-    });
-  for (;;) {
-    const line = await ask();
-    if (line === null) break;
-    try {
-      if (!(await app.execHeadless(line))) break;
-    } catch (err) {
-      console.error(`Error: ${(err as Error).message}`);
+  try {
+    for await (const raw of rl) {
+      const line = raw.trim();
+      if (!line || line.startsWith('#')) continue;
+      try {
+        if (!(await app.execHeadless(raw))) break;
+      } catch (err) {
+        console.error(`Error: ${(err as Error).message}`);
+      }
     }
+  } finally {
+    rl.close();
   }
-  rl.close();
 }
 
 /** Scripted session: feed command lines from a file (demos, tests). */

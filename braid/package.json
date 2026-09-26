@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.1",
+    "@rollup/rollup-linux-x64-gnu": "^4.63.5",
     "dotenv": "^16.6.1",
     "openai": "^4.104.0",
     "pg": "^8.23.0"
