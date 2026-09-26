@@ -10,6 +10,7 @@ import { completeJson } from '../../shared/llm_client.js';
 import type { FileManifest } from '../../shared/types.js';
 import { ManifestStore } from '../../orchestrator/manifest_store.js';
 import { diffManifest } from '../../orchestrator/manifest_diff.js';
+import { emitFileGenerated } from '../../telemetry/index.js';
 
 const PROMPT_PATH = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -107,6 +108,12 @@ export async function runSkeletonPass(
     mkdirSync(dirname(abs), { recursive: true });
     writeFileSync(abs, s.code.endsWith('\n') ? s.code : s.code + '\n', 'utf8');
     store.setStatus(s.path, 'skeleton');
+    emitFileGenerated({
+      path: s.path,
+      phase: 'skeleton',
+      status: 'skeleton',
+      sizeBytes: s.code.length,
+    });
     written.push(s.path);
     opts.onActivity?.({ kind: 'create', path: s.path, added: countLines(s.code), removed: 0 });
   }

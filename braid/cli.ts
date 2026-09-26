@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 /**
  * cli.ts — Headless Braid pipeline (CLI-first, per master.md §7).
- *   npx tsx cli.ts plan --project demo --prd ./prd.txt [--feedback "..."]
- *   npx tsx cli.ts run  --project demo --prd ./prd.txt [--auto-approve] [--smoke-only]
+ *   npx tsx cli.ts plan --project demo --prd ./prd.txt [--mock] [--feedback "..."]
+ *   npx tsx cli.ts run  --project demo --prd ./prd.txt [--mock] [--auto-approve] [--smoke-only]
  *
  * Exit codes: 0 ok · 1 error · 2 rejected at Gate 1 · 3 loop back at Gate 2.
- * Live models only: every stage calls its configured API key. If a call
- * fails, the command fails with the provider error — no offline fallback.
+ * Live models by default: every stage calls its configured API key. If a call
+ * fails, the command fails with the provider error.
+ * --mock runs fully offline with a deterministic demo plan (no API keys).
  * --smoke-only skips spawning vitest (real fs checks only); use where the
  *   sandbox cannot run workers, otherwise the real runner is the default.
  */
@@ -23,6 +24,7 @@ process.emitWarning = (warning: any, ...args: any[]) => {
 };
 
 import { config } from './shared/config.js';
+import { setMockHandler } from './shared/llm_client.js';
 import { planProject } from './agents/planner/planner.js';
 import { reviewPlan } from './agents/reviewer/reviewer.js';
 import {
@@ -41,9 +43,22 @@ import { runTests } from './agents/debugger/test_runner.js';
 import { generateReport } from './agents/reporter/reporter.js';
 import { LoopController, runRepairLoop } from './orchestrator/loop_controller.js';
 import { DigestStore } from './orchestrator/digest_store.js';
-import type { TestResults } from './shared/types.js';
-import { emptyTestResults } from './shared/types.js';
+import type { FileManifest, TestResults } from './shared/types.js';
+import { emptyTestResults, totalFailed, totalPassed } from './shared/types.js';
+import { statusCompleteness } from './orchestrator/manifest_diff.js';
 import { C } from './tui/theme.js';
+import {
+  eventPipeline,
+  emitRunStarted,
+  emitRunCompleted,
+  emitStageStarted,
+  emitStageCompleted,
+  emitHumanGateDecision,
+  emitTestStarted,
+  emitTestCompleted,
+  emitVerificationCompleted,
+  emitReportGenerated,
+} from './telemetry/index.js';
 
 /** Headless color helper: same reference-chat palette as the TUI, but
  *  plain text when piped (CI-safe). */
@@ -72,6 +87,7 @@ interface Flags {
   project: string;
   prd: string;
   feedback?: string;
+  mock: boolean;
   autoApprove: boolean;
   smokeOnly: boolean;
 }
@@ -80,13 +96,14 @@ function usage(): string {
   return [
     'Braid — autonomous SDLC agent (headless CLI)',
     '',
-    '  npx tsx cli.ts plan --project <name> --prd <file> [--feedback "..."]',
-    '  npx tsx cli.ts run  --project <name> --prd <file> [--auto-approve] [--smoke-only]',
+    '  npx tsx cli.ts plan --project <name> --prd <file> [--mock] [--feedback "..."]',
+    '  npx tsx cli.ts run  --project <name> --prd <file> [--mock] [--auto-approve] [--smoke-only]',
     '',
     'Flags:',
     '  --project <name>   output folder under generated_projects/<name>',
     '  --prd <file>       path to the PRD text file',
     '  --feedback <text>  prior gate feedback, folded into (re-)planning',
+    '  --mock             offline demo: deterministic mock models, no API keys',
     '  --auto-approve     pass both human gates without prompting',
     '  --smoke-only       skip vitest; real fs smoke check only (broken sandboxes)',
   ].join('\n');
@@ -107,6 +124,7 @@ function parseArgs(argv: string[]): { command: string; flags: Flags } {
       project,
       prd: prdPath,
       feedback: get('feedback'),
+      mock: has('mock'),
       autoApprove: has('auto-approve'),
       smokeOnly: has('smoke-only'),
     },
@@ -125,20 +143,138 @@ function readPrd(prdPath: string): string {
   return text;
 }
 
+/** Deterministic offline models: fixed 2-file demo plan shaped by the project. */
+function installMock(project: string): void {
+  let mockManifest: FileManifest | null = null;
+  setMockHandler((req) => {
+    if (req.stage === 'plan') {
+      return JSON.stringify({
+        taskGraph: {
+          nodes: [
+            { id: 't1', title: 'Scaffold app', dependsOn: [], files: ['src/app.ts'] },
+            { id: 't2', title: 'Wire entry', dependsOn: ['t1'], files: ['src/index.ts'] },
+          ],
+        },
+        manifest: {
+          project,
+          files: [
+            { path: 'src/app.ts', purpose: 'core logic', expectedExports: ['build'], dependencies: [], status: 'planned' },
+            { path: 'src/index.ts', purpose: 'entry point', expectedExports: ['main'], dependencies: ['src/app.ts'], status: 'planned' },
+          ],
+        },
+        testStubs: [{
+          file: 'tests/smoke.test.ts',
+          name: 'demo app builds ok',
+          code: [
+            "import { describe, expect, it } from 'vitest';",
+            "import { main } from '../src/index.js';",
+            "import { build } from '../src/app.js';",
+            "describe('demo app', () => {",
+            "  it('builds ok', () => { expect(build()).toBe('ok'); });",
+            "  it('mains ok', () => { expect(main()).toBe('ok'); });",
+            '});',
+            '',
+          ].join('\n'),
+        }],
+      });
+    }
+    if (req.stage === 'review') {
+      return JSON.stringify({ critiques: [], risks: [], riskScore: 0.1 });
+    }
+    if (req.stage === 'execute') {
+      // NOTE: match full pass names — the implementation prompt also mentions
+      // the word "skeleton" (it receives the file's skeleton as input).
+      if (req.systemPrompt.includes('skeleton pass')) {
+        if (!mockManifest) throw new Error('[mock] skeleton pass ran before manifest was set');
+        const files = mockManifest.files.map((f) => ({
+          path: f.path,
+          code: `/** ${f.purpose} */\n` + f.expectedExports
+            .map((e) => `export function ${e}(): string { throw new Error("not implemented"); }`)
+            .join('\n') + '\n',
+        }));
+        return JSON.stringify({ files });
+      }
+      const m = /TARGET FILE: (\S+)/.exec(req.userPrompt);
+      const target = m?.[1] ?? '';
+      if (target.endsWith('src/app.ts')) return 'export function build(): string { return "ok"; }\n';
+      if (target.endsWith('src/index.ts')) {
+        return 'import { build } from "./app.js";\nexport function main(): string { return build(); }\n';
+      }
+      return 'export const ok = true;\n';
+    }
+    if (req.stage === 'report') {
+      return JSON.stringify({
+        diffSummary: `Mock demo cycle for ${project}: 2 files implemented, smoke passing.`,
+        flaggedRisks: [],
+      });
+    }
+    if (req.stage === 'triage') return JSON.stringify({ patches: [] });
+    throw new Error(`[mock] Unhandled stage: ${req.stage}`);
+  });
+  // Expose a setter so the run command can feed the planned manifest in.
+  (globalThis as Record<string, unknown>).__braidMockManifest = (m: FileManifest) => {
+    mockManifest = m;
+  };
+}
+
+function setMockManifest(m: FileManifest): void {
+  const setter = (globalThis as Record<string, unknown>).__braidMockManifest as
+    | ((m: FileManifest) => void)
+    | undefined;
+  setter?.(m);
+}
+
 function prdToRequirements(prd: string): string[] {
   return prd.split('\n').map((l) => l.trim()).filter(Boolean).slice(0, 20);
 }
 
 async function cmdPlan(flags: Flags): Promise<void> {
   if (!flags.project) throw new Error('Missing --project <name>');
+  emitRunStarted({
+    projectName: flags.project,
+    prdPath: flags.prd,
+    mock: flags.mock,
+    autoApprove: flags.autoApprove,
+  });
   const prd = readPrd(flags.prd);
-  const plan = await planProject({ project: flags.project, prd, feedback: flags.feedback });
+  if (flags.mock) installMock(flags.project);
 
+  const planStart = Date.now();
+  emitStageStarted('plan', { modelUsed: config.planModel });
+  const plan = await planProject({ project: flags.project, prd, feedback: flags.feedback });
+  emitStageCompleted('plan', {
+    durationMs: Date.now() - planStart,
+    modelUsed: config.planModel,
+    payload: {
+      tasksCount: plan.taskGraph.nodes.length,
+      filesCount: plan.manifest.files.length,
+      stubsCount: plan.testStubs.length,
+    },
+  });
+  setMockManifest(plan.manifest);
+
+  const reviewStart = Date.now();
+  emitStageStarted('review', { modelUsed: config.reviewModel });
   let review;
   try {
     review = await reviewPlan(prd, plan);
+    emitStageCompleted('review', {
+      durationMs: Date.now() - reviewStart,
+      modelUsed: config.reviewModel,
+      payload: {
+        riskScore: review.riskScore,
+        risksCount: review.risks.length,
+        critiquesCount: review.critiques.length,
+      },
+    });
   } catch (err) {
     review = { critiques: [], risks: [`review unavailable: ${(err as Error).message}`], riskScore: 0.5 };
+    emitStageCompleted('review', {
+      durationMs: Date.now() - reviewStart,
+      modelUsed: config.reviewModel,
+      severity: 'warn',
+      payload: { riskScore: 0.5, error: (err as Error).message },
+    });
   }
   const summary = formatPlanSummary(plan, review);
   console.log(summary);
@@ -152,38 +288,100 @@ async function cmdPlan(flags: Flags): Promise<void> {
   const decision = flags.autoApprove
     ? decideGateReview(true)
     : await promptGateReview(summary);
+  emitHumanGateDecision({
+    gate: 1,
+    gateName: 'gate_review',
+    approved: decision.approved,
+    hasFeedback: Boolean(decision.feedback),
+    feedbackLength: decision.feedback?.length,
+    autoApproved: flags.autoApprove,
+  });
   if (!decision.approved) {
     console.log(`\nGate 1: REJECTED — feedback saved. Re-run with --feedback "...":\n${decision.feedback}`);
     writeFileSync(join(outDir, 'gate1-feedback.txt'), (decision.feedback ?? '') + '\n');
+    emitRunCompleted({ status: 'rejected_gate1' });
+    await eventPipeline.flush();
     process.exitCode = 2;
   } else {
     console.log('\nGate 1: APPROVED.');
+    emitRunCompleted({ status: 'completed' });
+    await eventPipeline.flush();
   }
 }
 
 async function cmdRun(flags: Flags): Promise<void> {
   if (!flags.project) throw new Error('Missing --project <name>');
+  emitRunStarted({
+    projectName: flags.project,
+    prdPath: flags.prd,
+    mock: flags.mock,
+    smokeOnly: flags.smokeOnly,
+    autoApprove: flags.autoApprove,
+  });
   const prd = readPrd(flags.prd);
+  if (flags.mock) installMock(flags.project);
 
   // PLAN + REVIEW
+  const planStart = Date.now();
+  emitStageStarted('plan', { modelUsed: config.planModel });
   const plan = await planProject({ project: flags.project, prd, feedback: flags.feedback });
+  emitStageCompleted('plan', {
+    durationMs: Date.now() - planStart,
+    modelUsed: config.planModel,
+    payload: {
+      tasksCount: plan.taskGraph.nodes.length,
+      filesCount: plan.manifest.files.length,
+      stubsCount: plan.testStubs.length,
+    },
+  });
+  setMockManifest(plan.manifest);
+
+  const reviewStart = Date.now();
+  emitStageStarted('review', { modelUsed: config.reviewModel });
   let review;
   try {
     review = await reviewPlan(prd, plan);
+    emitStageCompleted('review', {
+      durationMs: Date.now() - reviewStart,
+      modelUsed: config.reviewModel,
+      payload: {
+        riskScore: review.riskScore,
+        risksCount: review.risks.length,
+        critiquesCount: review.critiques.length,
+      },
+    });
   } catch (err) {
     review = { critiques: [], risks: [`review unavailable: ${(err as Error).message}`], riskScore: 0.5 };
+    emitStageCompleted('review', {
+      durationMs: Date.now() - reviewStart,
+      modelUsed: config.reviewModel,
+      severity: 'warn',
+      payload: { riskScore: 0.5, error: (err as Error).message },
+    });
   }
   const planSummary = formatPlanSummary(plan, review);
   console.log(planSummary);
 
   const gate1 = flags.autoApprove ? decideGateReview(true) : await promptGateReview(planSummary);
+  emitHumanGateDecision({
+    gate: 1,
+    gateName: 'gate_review',
+    approved: gate1.approved,
+    hasFeedback: Boolean(gate1.feedback),
+    feedbackLength: gate1.feedback?.length,
+    autoApproved: flags.autoApprove,
+  });
   if (!gate1.approved) {
     console.log(`\nGate 1: REJECTED.\n${gate1.feedback}`);
+    emitRunCompleted({ status: 'rejected_gate1' });
+    await eventPipeline.flush();
     process.exitCode = 2;
     return;
   }
 
   // EXECUTE — reference-chat colors (TTY) / plain when piped.
+  const execStart = Date.now();
+  emitStageStarted('execute', { modelUsed: config.executeModel });
   const generatedRoot = resolve(config.generatedRoot);
   const projectRoot = join(generatedRoot, flags.project);
   mkdirSync(projectRoot, { recursive: true });
@@ -217,9 +415,23 @@ async function cmdRun(flags: Flags): Promise<void> {
   console.log(tty(`${C.pipelineDim}○ Run smoke tests${C.reset}`));
   console.log(tty(`${C.pipelineDim}○ Run regression tests${C.reset}`));
   console.log(tty(`${C.pipelineDim}○ Generate report${C.reset}`));
+  emitStageCompleted('execute', {
+    durationMs: Date.now() - execStart,
+    modelUsed: config.executeModel,
+    payload: {
+      implementedCount: changedFiles.length,
+      totalCount: store.snapshot().files.length,
+    },
+  });
 
   // DEBUG (+ capped self-loop repair)
   console.log('\n--- DEBUG ---');
+  const debugStart = Date.now();
+  emitStageStarted('debug', { modelUsed: config.triageModel });
+  emitTestStarted({
+    testType: flags.smokeOnly ? 'smoke' : 'all',
+    stubsCount: plan.testStubs.length,
+  });
   const controller = new LoopController();
   let results: TestResults;
   const risks: string[] = [...review.risks];
@@ -258,27 +470,85 @@ async function cmdRun(flags: Flags): Promise<void> {
       if (!repaired.converged) risks.push('self-loop budget exhausted with failing tests');
     }
   }
+  emitTestCompleted({
+    smokePassed: results.smoke.passed,
+    smokeFailed: results.smoke.failed,
+    stubsPassed: results.stubs.passed,
+    stubsFailed: results.stubs.failed,
+    regressionPassed: results.regression.passed,
+    regressionFailed: results.regression.failed,
+  });
   console.log(`Tests — smoke ${results.smoke.passed}/${results.smoke.failed}, stubs ${results.stubs.passed}/${results.stubs.failed}`);
 
+  const totalFail = results.smoke.failed + results.stubs.failed + results.regression.failed;
+  emitVerificationCompleted({
+    status: totalFail === 0 ? 'passed' : 'failed',
+    smokePassed: results.smoke.passed,
+    smokeFailed: results.smoke.failed,
+    stubsPassed: results.stubs.passed,
+    stubsFailed: results.stubs.failed,
+    manifestCompleteness: statusCompleteness(store.snapshot()),
+    repairAttempts: controller.selfLoops,
+    converged: totalFail === 0,
+  });
+  emitStageCompleted('debug', {
+    durationMs: Date.now() - debugStart,
+    modelUsed: config.triageModel,
+    payload: {
+      totalPassed: totalPassed(results),
+      totalFailed: totalFail,
+      repairAttempts: controller.selfLoops,
+    },
+  });
+
   // REPORT + GATE 2
+  const reportStart = Date.now();
+  emitStageStarted('report', { modelUsed: config.reportModel });
+  const requirements = prdToRequirements(prd);
   const report = await generateReport({
     manifest: store.snapshot(),
     testResults: results,
     changedFiles,
     risks,
-    requirements: prdToRequirements(prd),
+    requirements,
   });
   writeFileSync(join(projectRoot, 'report.json'), JSON.stringify(report, null, 2) + '\n');
   const reportSummary = formatReportSummary(report);
   console.log('\n--- REPORT ---\n' + reportSummary);
+  emitReportGenerated({
+    manifestCompleteness: report.manifestCompleteness,
+    totalPassed: totalPassed(report.testResults),
+    totalFailed: totalFailed(report.testResults),
+    prdCoverageImplemented: report.prdCoverage.filter((c) => c.status === 'implemented').length,
+    prdCoverageTotal: report.prdCoverage.length,
+    flaggedRisksCount: report.flaggedRisks.length,
+    durationMs: Date.now() - reportStart,
+    modelUsed: config.reportModel,
+  });
+  emitStageCompleted('report', {
+    durationMs: Date.now() - reportStart,
+    modelUsed: config.reportModel,
+  });
 
   const gate2 = flags.autoApprove ? decideGateReport(true) : await promptGateReport(reportSummary);
+  emitHumanGateDecision({
+    gate: 2,
+    gateName: 'gate_report',
+    approved: gate2.approved,
+    hasFeedback: Boolean(gate2.feedback),
+    feedbackLength: gate2.feedback?.length,
+    autoApproved: flags.autoApprove,
+  });
   if (!gate2.approved) {
     console.log(`\nGate 2: LOOP BACK TO PLAN.\n${gate2.feedback}`);
     writeFileSync(join(projectRoot, 'gate2-feedback.txt'), (gate2.feedback ?? '') + '\n');
+    emitRunCompleted({ status: 'rejected_gate2' });
+    await eventPipeline.flush();
     process.exitCode = 3;
   } else {
     console.log('\nDone.');
+    emitRunCompleted({ status: 'completed' });
+    await eventPipeline.flush();
   }
 }
 
@@ -289,6 +559,8 @@ async function main(): Promise<void> {
     else if (command === 'run') await cmdRun(flags);
     else console.log(usage());
   } catch (err) {
+    emitRunCompleted({ status: 'failed', error: (err as Error).message });
+    await eventPipeline.flush();
     console.error(`Error: ${(err as Error).message}`);
     process.exitCode = 1;
   }
@@ -302,5 +574,5 @@ if (
   void main();
 }
 
-export { cmdPlan, cmdRun, parseArgs, readPrd, usage };
+export { cmdPlan, cmdRun, installMock, setMockManifest, parseArgs, readPrd, usage };
 export type { Flags };

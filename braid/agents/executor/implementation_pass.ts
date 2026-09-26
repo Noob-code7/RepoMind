@@ -11,6 +11,7 @@ import { complete } from '../../shared/llm_client.js';
 import type { FileManifestEntry } from '../../shared/types.js';
 import { ManifestStore } from '../../orchestrator/manifest_store.js';
 import { DigestStore } from '../../orchestrator/digest_store.js';
+import { emitFileGenerated } from '../../telemetry/index.js';
 
 const PROMPT_PATH = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -174,6 +175,12 @@ export async function runImplementationPass(
     const { added, removed } = countDiff(skeleton, code);
     writeFileSync(join(projectRoot, entry.path), code.endsWith('\n') ? code : code + '\n', 'utf8');
     store.setStatus(entry.path, 'implemented');
+    emitFileGenerated({
+      path: entry.path,
+      phase: 'implementation',
+      status: 'implemented',
+      sizeBytes: code.length,
+    });
     opts.onActivity?.({ kind: 'edit', path: entry.path, added, removed });
     // Keep digest fresh after every write (cheap, small, full-coverage).
     const purpose = store.get(entry.path)?.purpose ?? '';

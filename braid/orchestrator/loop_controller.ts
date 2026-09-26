@@ -15,8 +15,14 @@ import type { ManifestStore } from './manifest_store.js';
 import type { DigestStore } from './digest_store.js';
 import { triageFailures } from '../agents/debugger/failure_triage.js';
 import { applyPatch } from '../agents/executor/ast_patcher.js';
+import {
+  emitRepairStarted,
+  emitRepairCompleted,
+  emitFileGenerated,
+} from '../telemetry/index.js';
 
 export const DEFAULT_MAX_AGILE_CYCLES = 5;
+
 
 export class LoopController {
   private selfLoopAttempts = 0;
@@ -111,6 +117,11 @@ export async function runRepairLoop(
   let results = await args.retest();
   while (totalFailed(results) > 0 && args.controller.canSelfLoop()) {
     args.controller.recordSelfLoop();
+    emitRepairStarted({
+      attempt: args.controller.selfLoops,
+      maxAttempts: args.controller.maxSelfLoop,
+      failuresText: args.failures,
+    });
     const sources = args.allowedPaths.map((p) => ({
       path: p,
       source: readFileSync(join(args.projectRoot, p), 'utf8'),
@@ -129,8 +140,20 @@ export async function runRepairLoop(
       );
       args.digest.upsert(patch.path, updated);
       args.store.setStatus(patch.path, 'implemented');
+      emitFileGenerated({
+        path: patch.path,
+        phase: 'patch',
+        status: 'implemented',
+        sizeBytes: updated.length,
+      });
     }
     results = await args.retest();
+    emitRepairCompleted({
+      attempt: args.controller.selfLoops,
+      patchesCount: patches.length,
+      patchPaths: patches.map((p) => p.path),
+      converged: totalFailed(results) === 0,
+    });
   }
   return {
     attempts: args.controller.selfLoops,
