@@ -59,6 +59,8 @@ import {
   emitVerificationCompleted,
   emitReportGenerated,
 } from './telemetry/index.js';
+import { AnalyticsService, analyticsService } from './telemetry/analytics_service.js';
+import { formatRunSummaryText } from './telemetry/summary_view.js';
 
 /** Headless color helper: same reference-chat palette as the TUI, but
  *  plain text when piped (CI-safe). */
@@ -90,6 +92,7 @@ interface Flags {
   mock: boolean;
   autoApprove: boolean;
   smokeOnly: boolean;
+  runId?: string;
 }
 
 function usage(): string {
@@ -98,6 +101,7 @@ function usage(): string {
     '',
     '  npx tsx cli.ts plan --project <name> --prd <file> [--mock] [--feedback "..."]',
     '  npx tsx cli.ts run  --project <name> --prd <file> [--mock] [--auto-approve] [--smoke-only]',
+    '  npx tsx cli.ts telemetry --run <run-id>',
     '',
     'Flags:',
     '  --project <name>   output folder under generated_projects/<name>',
@@ -106,6 +110,7 @@ function usage(): string {
     '  --mock             offline demo: deterministic mock models, no API keys',
     '  --auto-approve     pass both human gates without prompting',
     '  --smoke-only       skip vitest; real fs smoke check only (broken sandboxes)',
+    '  --run <run-id>     telemetry run to summarize (requires TIGER_DATABASE_URL)',
   ].join('\n');
 }
 
@@ -127,6 +132,7 @@ function parseArgs(argv: string[]): { command: string; flags: Flags } {
       mock: has('mock'),
       autoApprove: has('auto-approve'),
       smokeOnly: has('smoke-only'),
+      runId: get('run'),
     },
   };
 }
@@ -552,8 +558,47 @@ async function cmdRun(flags: Flags): Promise<void> {
   }
 }
 
+/**
+ * cmdTelemetry — read-only: summarize one recorded run from Tiger Data.
+ * Never emits telemetry itself and never touches the pipeline.
+ */
+async function cmdTelemetry(flags: Flags, service: AnalyticsService = analyticsService): Promise<void> {
+  if (!service.isEnabled) {
+    console.log('Telemetry is disabled. Set TIGER_DATABASE_URL (and optionally TIGER_TELEMETRY_ENABLED=true) to enable it.');
+    process.exitCode = 1;
+    return;
+  }
+  if (!flags.runId) {
+    console.log('Missing --run <run-id>.\n\n' + usage());
+    process.exitCode = 1;
+    return;
+  }
+  const summary = await service.getRunSummary(flags.runId);
+  if (!summary) {
+    console.log(`No telemetry found for run '${flags.runId}'.`);
+    process.exitCode = 1;
+    return;
+  }
+  const [stages, tests, files, coverage] = await Promise.all([
+    service.getStagePerformance(flags.runId),
+    service.getTestMetrics(flags.runId),
+    service.getFileGenerationMetrics(flags.runId),
+    service.getPrdCoverage(flags.runId),
+  ]);
+  console.log(formatRunSummaryText({ summary, stages, tests, files, coverage }));
+}
+
 async function main(): Promise<void> {
   const { command, flags } = parseArgs(process.argv.slice(2));
+  if (command === 'telemetry') {
+    try {
+      await cmdTelemetry(flags);
+    } catch (err) {
+      console.error(`Error: ${(err as Error).message}`);
+      process.exitCode = 1;
+    }
+    return;
+  }
   try {
     if (command === 'plan') await cmdPlan(flags);
     else if (command === 'run') await cmdRun(flags);
@@ -574,5 +619,5 @@ if (
   void main();
 }
 
-export { cmdPlan, cmdRun, installMock, setMockManifest, parseArgs, readPrd, usage };
+export { cmdPlan, cmdRun, cmdTelemetry, installMock, setMockManifest, parseArgs, readPrd, usage };
 export type { Flags };
