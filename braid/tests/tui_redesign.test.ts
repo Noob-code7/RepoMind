@@ -76,14 +76,14 @@ describe('redesign: pipeline progress', () => {
     expect(isPipelineIdle(p)).toBe(false);
   });
 
-  it('colors active purple / done green / failed red, pending muted', () => {
+  it('colors done green-dot / pending dim, active body-white, failed red', () => {
     const p = initialPipeline();
     p.prd = 'completed';
     p.plan = 'running';
     const line = renderPipelineLine(p, 100);
-    expect(line).toContain(C.green);
-    expect(line).toContain(C.accent);
-    expect(line).toContain(C.muted);
+    expect(line).toContain(C.pipelineDone);
+    expect(line).toContain(C.pipelineGray);
+    expect(line).toContain(C.pipelineDim);
     const failed: PipelineMap = { ...initialPipeline(), debug: 'failed' };
     expect(renderPipelineLine(failed, 100)).toContain(C.red);
     const approval: PipelineMap = { ...initialPipeline(), approval: 'awaiting-approval' };
