@@ -3,20 +3,54 @@
     "nodes": [
       {
         "id": "t1",
-        "title": "Scaffold app",
+        "title": "Initialize Orchestrator and State Machine",
         "dependsOn": [],
         "files": [
-          "src/app.ts"
+          "src/orchestrator/engine.ts",
+          "src/orchestrator/types.ts"
         ]
       },
       {
         "id": "t2",
-        "title": "Wire entry",
+        "title": "Implement Planning Engine",
         "dependsOn": [
           "t1"
         ],
         "files": [
-          "src/index.ts"
+          "src/agents/planner.ts",
+          "src/agents/reviewer.ts"
+        ]
+      },
+      {
+        "id": "t3",
+        "title": "Implement Execution Engine (Braid)",
+        "dependsOn": [
+          "t2"
+        ],
+        "files": [
+          "src/agents/executor.ts",
+          "src/agents/digest.ts"
+        ]
+      },
+      {
+        "id": "t4",
+        "title": "Implement Verification & Debugging",
+        "dependsOn": [
+          "t3"
+        ],
+        "files": [
+          "src/verification/runner.ts",
+          "src/verification/triage.ts"
+        ]
+      },
+      {
+        "id": "t5",
+        "title": "Implement Reporting Engine",
+        "dependsOn": [
+          "t4"
+        ],
+        "files": [
+          "src/reporting/reporter.ts"
         ]
       }
     ]
@@ -25,22 +59,97 @@
     "project": "verify-probe",
     "files": [
       {
-        "path": "src/app.ts",
-        "purpose": "core logic",
+        "path": "src/orchestrator/engine.ts",
+        "purpose": "Core state machine driving the SDLC pipeline",
         "expectedExports": [
-          "build"
+          "Orchestrator"
         ],
         "dependencies": [],
         "status": "planned"
       },
       {
-        "path": "src/index.ts",
-        "purpose": "entry point",
+        "path": "src/orchestrator/types.ts",
+        "purpose": "Shared types for Plan, Manifest, and TaskGraph",
         "expectedExports": [
-          "main"
+          "PipelineState",
+          "Manifest",
+          "TaskNode"
+        ],
+        "dependencies": [],
+        "status": "planned"
+      },
+      {
+        "path": "src/agents/planner.ts",
+        "purpose": "LLM wrapper for generating task graphs and manifests",
+        "expectedExports": [
+          "generatePlan"
         ],
         "dependencies": [
-          "src/app.ts"
+          "src/orchestrator/types.ts"
+        ],
+        "status": "planned"
+      },
+      {
+        "path": "src/agents/reviewer.ts",
+        "purpose": "Independent model for plan critique and risk assessment",
+        "expectedExports": [
+          "reviewPlan"
+        ],
+        "dependencies": [
+          "src/orchestrator/types.ts"
+        ],
+        "status": "planned"
+      },
+      {
+        "path": "src/agents/executor.ts",
+        "purpose": "Two-pass (skeleton/implementation) generation engine",
+        "expectedExports": [
+          "executePlan"
+        ],
+        "dependencies": [
+          "src/agents/digest.ts",
+          "src/orchestrator/types.ts"
+        ],
+        "status": "planned"
+      },
+      {
+        "path": "src/agents/digest.ts",
+        "purpose": "Maintains condensed interface index for context efficiency",
+        "expectedExports": [
+          "updateDigest",
+          "getInterfaceContext"
+        ],
+        "dependencies": [],
+        "status": "planned"
+      },
+      {
+        "path": "src/verification/runner.ts",
+        "purpose": "Deterministic execution of test stubs and smoke tests",
+        "expectedExports": [
+          "runTests"
+        ],
+        "dependencies": [],
+        "status": "planned"
+      },
+      {
+        "path": "src/verification/triage.ts",
+        "purpose": "LLM-based interpretation of test failure logs",
+        "expectedExports": [
+          "triageFailure"
+        ],
+        "dependencies": [
+          "src/verification/runner.ts"
+        ],
+        "status": "planned"
+      },
+      {
+        "path": "src/reporting/reporter.ts",
+        "purpose": "Generates coverage and diff summaries",
+        "expectedExports": [
+          "generateReport"
+        ],
+        "dependencies": [
+          "src/orchestrator/types.ts"
         ],
         "status": "planned"
       }
@@ -48,9 +157,19 @@
   },
   "testStubs": [
     {
-      "file": "tests/smoke.test.ts",
-      "name": "demo app builds ok",
-      "code": "import { describe, expect, it } from 'vitest';\nimport { main } from '../src/index.js';\nimport { build } from '../src/app.js';\ndescribe('demo app', () => {\n  it('builds ok', () => { expect(build()).toBe('ok'); });\n  it('mains ok', () => { expect(main()).toBe('ok'); });\n});\n"
+      "file": "tests/orchestrator.test.ts",
+      "name": "test_orchestrator_flow",
+      "code": "import { describe, it, expect } from 'vitest';\nimport { Orchestrator } from '../src/orchestrator/engine';\n\ndescribe('Orchestrator', () => {\n  it('should transition from PLAN to EXECUTE', async () => {\n    const orch = new Orchestrator();\n    expect(orch.state).toBe('IDLE');\n  });\n});"
+    },
+    {
+      "file": "tests/planner.test.ts",
+      "name": "test_plan_generation",
+      "code": "import { describe, it, expect } from 'vitest';\nimport { generatePlan } from '../src/agents/planner';\n\ndescribe('Planner', () => {\n  it('should produce a valid manifest', async () => {\n    const plan = await generatePlan('test prd');\n    expect(plan.manifest).toBeDefined();\n  });\n});"
+    },
+    {
+      "file": "tests/executor.test.ts",
+      "name": "test_manifest_enforcement",
+      "code": "import { describe, it, expect } from 'vitest';\nimport { executePlan } from '../src/agents/executor';\n\ndescribe('Executor', () => {\n  it('should match written files to manifest', async () => {\n    // Mock implementation\n    expect(true).toBe(true);\n  });\n});"
     }
   ]
 }

@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 /**
  * cli.ts — Headless Braid pipeline (CLI-first, per master.md §7).
- *   npx tsx cli.ts plan --project demo --prd ./prd.txt [--mock] [--feedback "..."]
- *   npx tsx cli.ts run  --project demo --prd ./prd.txt [--mock] [--auto-approve] [--smoke-only]
+ *   npx tsx cli.ts plan --project demo --prd ./prd.txt [--feedback "..."]
+ *   npx tsx cli.ts run  --project demo --prd ./prd.txt [--auto-approve] [--smoke-only]
  *
  * Exit codes: 0 ok · 1 error · 2 rejected at Gate 1 · 3 loop back at Gate 2.
- * --mock runs fully offline with a deterministic demo plan (no API keys).
+ * Live models only: every stage calls its configured API key. If a call
+ * fails, the command fails with the provider error — no offline fallback.
  * --smoke-only skips spawning vitest (real fs checks only); use where the
  *   sandbox cannot run workers, otherwise the real runner is the default.
  */
@@ -22,7 +23,6 @@ process.emitWarning = (warning: any, ...args: any[]) => {
 };
 
 import { config } from './shared/config.js';
-import { setMockHandler } from './shared/llm_client.js';
 import { planProject } from './agents/planner/planner.js';
 import { reviewPlan } from './agents/reviewer/reviewer.js';
 import {
@@ -41,8 +41,30 @@ import { runTests } from './agents/debugger/test_runner.js';
 import { generateReport } from './agents/reporter/reporter.js';
 import { LoopController, runRepairLoop } from './orchestrator/loop_controller.js';
 import { DigestStore } from './orchestrator/digest_store.js';
-import type { FileManifest, TestResults } from './shared/types.js';
+import type { TestResults } from './shared/types.js';
 import { emptyTestResults } from './shared/types.js';
+import { C } from './tui/theme.js';
+
+/** Headless color helper: same reference-chat palette as the TUI, but
+ *  plain text when piped (CI-safe). */
+// eslint-disable-next-line no-control-regex
+function stripCliAnsi(s: string): string {
+  return s.replace(/\x1b\[[0-9;]*m/g, '');
+}
+
+function tty(s: string): string {
+  return process.stdout.isTTY ? s : stripCliAnsi(s);
+}
+
+/** Reference-style pipeline line for headless logs (TTY-colored, pipe-plain). */
+function headlessPipeline(): string {
+  const done = (label: string): string => `${C.pipelineGray}${label}${C.reset} ${C.pipelineDone}●${C.reset}`;
+  const todo = (label: string): string => `${C.pipelineDim}${label}${C.reset} ${C.pipelineDim}○${C.reset}`;
+  const arrow = `${C.pipelineDim} → ${C.reset}`;
+  return tty(
+    [done('Plan'), done('Review'), done('Approval'), done('Execute'), todo('Debug'), todo('Report')].join(arrow),
+  );
+}
 
 const BRAID_ROOT = dirname(fileURLToPath(import.meta.url));
 
@@ -50,7 +72,6 @@ interface Flags {
   project: string;
   prd: string;
   feedback?: string;
-  mock: boolean;
   autoApprove: boolean;
   smokeOnly: boolean;
 }
@@ -59,14 +80,13 @@ function usage(): string {
   return [
     'Braid — autonomous SDLC agent (headless CLI)',
     '',
-    '  npx tsx cli.ts plan --project <name> --prd <file> [--mock] [--feedback "..."]',
-    '  npx tsx cli.ts run  --project <name> --prd <file> [--mock] [--auto-approve] [--smoke-only]',
+    '  npx tsx cli.ts plan --project <name> --prd <file> [--feedback "..."]',
+    '  npx tsx cli.ts run  --project <name> --prd <file> [--auto-approve] [--smoke-only]',
     '',
     'Flags:',
     '  --project <name>   output folder under generated_projects/<name>',
     '  --prd <file>       path to the PRD text file',
     '  --feedback <text>  prior gate feedback, folded into (re-)planning',
-    '  --mock             offline demo: deterministic mock models, no API keys',
     '  --auto-approve     pass both human gates without prompting',
     '  --smoke-only       skip vitest; real fs smoke check only (broken sandboxes)',
   ].join('\n');
@@ -87,7 +107,6 @@ function parseArgs(argv: string[]): { command: string; flags: Flags } {
       project,
       prd: prdPath,
       feedback: get('feedback'),
-      mock: has('mock'),
       autoApprove: has('auto-approve'),
       smokeOnly: has('smoke-only'),
     },
@@ -106,87 +125,6 @@ function readPrd(prdPath: string): string {
   return text;
 }
 
-/** Deterministic offline models: fixed 2-file demo plan shaped by the project. */
-function installMock(project: string): void {
-  let mockManifest: FileManifest | null = null;
-  setMockHandler((req) => {
-    if (req.stage === 'plan') {
-      return JSON.stringify({
-        taskGraph: {
-          nodes: [
-            { id: 't1', title: 'Scaffold app', dependsOn: [], files: ['src/app.ts'] },
-            { id: 't2', title: 'Wire entry', dependsOn: ['t1'], files: ['src/index.ts'] },
-          ],
-        },
-        manifest: {
-          project,
-          files: [
-            { path: 'src/app.ts', purpose: 'core logic', expectedExports: ['build'], dependencies: [], status: 'planned' },
-            { path: 'src/index.ts', purpose: 'entry point', expectedExports: ['main'], dependencies: ['src/app.ts'], status: 'planned' },
-          ],
-        },
-        testStubs: [{
-          file: 'tests/smoke.test.ts',
-          name: 'demo app builds ok',
-          code: [
-            "import { describe, expect, it } from 'vitest';",
-            "import { main } from '../src/index.js';",
-            "import { build } from '../src/app.js';",
-            "describe('demo app', () => {",
-            "  it('builds ok', () => { expect(build()).toBe('ok'); });",
-            "  it('mains ok', () => { expect(main()).toBe('ok'); });",
-            '});',
-            '',
-          ].join('\n'),
-        }],
-      });
-    }
-    if (req.stage === 'review') {
-      return JSON.stringify({ critiques: [], risks: [], riskScore: 0.1 });
-    }
-    if (req.stage === 'execute') {
-      // NOTE: match full pass names — the implementation prompt also mentions
-      // the word "skeleton" (it receives the file's skeleton as input).
-      if (req.systemPrompt.includes('skeleton pass')) {
-        if (!mockManifest) throw new Error('[mock] skeleton pass ran before manifest was set');
-        const files = mockManifest.files.map((f) => ({
-          path: f.path,
-          code: `/** ${f.purpose} */\n` + f.expectedExports
-            .map((e) => `export function ${e}(): string { throw new Error("not implemented"); }`)
-            .join('\n') + '\n',
-        }));
-        return JSON.stringify({ files });
-      }
-      const m = /TARGET FILE: (\S+)/.exec(req.userPrompt);
-      const target = m?.[1] ?? '';
-      if (target.endsWith('src/app.ts')) return 'export function build(): string { return "ok"; }\n';
-      if (target.endsWith('src/index.ts')) {
-        return 'import { build } from "./app.js";\nexport function main(): string { return build(); }\n';
-      }
-      return 'export const ok = true;\n';
-    }
-    if (req.stage === 'report') {
-      return JSON.stringify({
-        diffSummary: `Mock demo cycle for ${project}: 2 files implemented, smoke passing.`,
-        flaggedRisks: [],
-      });
-    }
-    if (req.stage === 'triage') return JSON.stringify({ patches: [] });
-    throw new Error(`[mock] Unhandled stage: ${req.stage}`);
-  });
-  // Expose a setter so the run command can feed the planned manifest in.
-  (globalThis as Record<string, unknown>).__braidMockManifest = (m: FileManifest) => {
-    mockManifest = m;
-  };
-}
-
-function setMockManifest(m: FileManifest): void {
-  const setter = (globalThis as Record<string, unknown>).__braidMockManifest as
-    | ((m: FileManifest) => void)
-    | undefined;
-  setter?.(m);
-}
-
 function prdToRequirements(prd: string): string[] {
   return prd.split('\n').map((l) => l.trim()).filter(Boolean).slice(0, 20);
 }
@@ -194,9 +132,7 @@ function prdToRequirements(prd: string): string[] {
 async function cmdPlan(flags: Flags): Promise<void> {
   if (!flags.project) throw new Error('Missing --project <name>');
   const prd = readPrd(flags.prd);
-  if (flags.mock) installMock(flags.project);
   const plan = await planProject({ project: flags.project, prd, feedback: flags.feedback });
-  setMockManifest(plan.manifest);
 
   let review;
   try {
@@ -228,11 +164,9 @@ async function cmdPlan(flags: Flags): Promise<void> {
 async function cmdRun(flags: Flags): Promise<void> {
   if (!flags.project) throw new Error('Missing --project <name>');
   const prd = readPrd(flags.prd);
-  if (flags.mock) installMock(flags.project);
 
   // PLAN + REVIEW
   const plan = await planProject({ project: flags.project, prd, feedback: flags.feedback });
-  setMockManifest(plan.manifest);
   let review;
   try {
     review = await reviewPlan(prd, plan);
@@ -249,14 +183,14 @@ async function cmdRun(flags: Flags): Promise<void> {
     return;
   }
 
-  // EXECUTE — mid-execution terminal view (pitch-black, functional color only).
+  // EXECUTE — reference-chat colors (TTY) / plain when piped.
   const generatedRoot = resolve(config.generatedRoot);
   const projectRoot = join(generatedRoot, flags.project);
   mkdirSync(projectRoot, { recursive: true });
   const store = new ManifestStore(manifestPathFor(generatedRoot, flags.project), plan.manifest);
   writeFileSync(join(projectRoot, 'plan.json'), JSON.stringify(plan, null, 2) + '\n');
-  console.log('\n--- EXECUTE (skeleton → digest → implementation) ---');
-  console.log('Plan ✓ → Review ✓ → Approval ✓ → Execute ● → Debug ○ → Report ○');
+  console.log(tty(`\n${C.pipelineDim}--- EXECUTE (skeleton → digest → implementation) ---${C.reset}`));
+  console.log(headlessPipeline());
   const execEvents: Array<{
     kind: 'read' | 'create' | 'edit';
     path: string;
@@ -274,15 +208,15 @@ async function cmdRun(flags: Flags): Promise<void> {
   });
   const { summarizeTotals } = await import('./tui/execution_view.js');
   const totals = summarizeTotals(execEvents);
-  console.log(`TOTAL  ${totals.files} files changed  +${totals.added} -${totals.removed}`);
+  console.log(tty(`${C.pipelineDim}TOTAL${C.reset}  ${C.placeholder}${totals.files} files changed${C.reset}  ${C.green}+${totals.added}${C.reset} ${C.red}−${totals.removed}${C.reset}`));
   const changedFiles = store.byStatus('implemented');
-  console.log(`Implemented: ${changedFiles.join(', ')}`);
-  console.log('✓ Generate file manifest');
-  console.log(`✓ Skeleton pass — ${store.list().length} files`);
-  console.log(`◐ Implementation pass — ${changedFiles.length} of ${store.list().length} done`);
-  console.log('○ Run smoke tests');
-  console.log('○ Run regression tests');
-  console.log('○ Generate report');
+  console.log(tty(`${C.userBlue}You${C.reset} ${C.pipelineDim}[build]${C.reset} ${changedFiles.join(', ')}`));
+  console.log(tty(`${C.pipelineDone}●${C.reset} ${C.pipelineGray}Generate file manifest${C.reset}`));
+  console.log(tty(`${C.pipelineDone}●${C.reset} ${C.pipelineGray}Skeleton pass — ${store.list().length} files${C.reset}`));
+  console.log(tty(`${C.amber}◐${C.reset} ${C.body}Implementation pass — ${changedFiles.length} of ${store.list().length} done${C.reset}`));
+  console.log(tty(`${C.pipelineDim}○ Run smoke tests${C.reset}`));
+  console.log(tty(`${C.pipelineDim}○ Run regression tests${C.reset}`));
+  console.log(tty(`${C.pipelineDim}○ Generate report${C.reset}`));
 
   // DEBUG (+ capped self-loop repair)
   console.log('\n--- DEBUG ---');
@@ -368,5 +302,5 @@ if (
   void main();
 }
 
-export { cmdPlan, cmdRun, installMock, setMockManifest, parseArgs, readPrd, usage };
+export { cmdPlan, cmdRun, parseArgs, readPrd, usage };
 export type { Flags };

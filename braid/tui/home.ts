@@ -29,23 +29,23 @@ export const HOME_SUGGESTIONS: HomeSuggestion[] = [
 
 function glyphFor(status: StageStatus): { glyph: string; color: string } {
   switch (status) {
-    case 'completed': return { glyph: '✓', color: C.green };
-    case 'running': return { glyph: '●', color: C.text };
+    case 'completed': return { glyph: '●', color: C.pipelineDone };
+    case 'running': return { glyph: '●', color: C.pipelineDone };
     case 'awaiting-approval': return { glyph: '◐', color: C.amber };
     case 'failed': return { glyph: '✕', color: C.red };
-    default: return { glyph: '○', color: C.muted };
+    default: return { glyph: '○', color: C.pipelineDim };
   }
 }
 
 /**
- * Single compact pipeline line, e.g. `Plan ✓ → Execute ● → Debug ○ …`.
- * Pitch-black traditional terminal: white current, gray pending,
- * subtle green check for completed, amber in-progress marker, red failed.
- * No glow, no gradient, no bright branding color.
+ * Single compact pipeline line, e.g. `PRD ● → Plan ○ …`.
+ * Reference-chat style on pure black: gray labels, green filled dot for
+ * completed/running, hollow dim circle for pending, amber awaiting,
+ * red failed. Arrows dim.
  */
 export function renderPipelineLine(p: PipelineMap, cols: number): string {
   const narrow = cols < 72;
-  const sep = `${C.faint} → ${C.reset}`;
+  const sep = `${C.pipelineDim} → ${C.reset}`;
   const parts = PIPELINE_STAGES.map((stage) => {
     const { glyph, color } = glyphFor(p[stage]);
     const label = narrow
@@ -53,8 +53,8 @@ export function renderPipelineLine(p: PipelineMap, cols: number): string {
       : STAGE_LABELS[stage];
     const active = p[stage] === 'running' || p[stage] === 'awaiting-approval';
     const name = active
-      ? `${C.reset}${label}${C.reset}`
-      : `${C.muted}${label}${C.reset}`;
+      ? `${C.body}${label}${C.reset}`
+      : `${C.pipelineGray}${label}${C.reset}`;
     return `${name} ${color}${glyph}${C.reset}`;
   });
   return fitLine(parts.join(sep), Math.max(20, cols - 4));

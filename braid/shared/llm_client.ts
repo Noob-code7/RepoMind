@@ -8,7 +8,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
 import { apiKeyFor, config } from './config.js';
 
-export type LlmStage = 'plan' | 'review' | 'execute' | 'triage' | 'report';
+export type LlmStage = 'chat' | 'plan' | 'review' | 'execute' | 'triage' | 'report';
 
 export interface LlmRequest {
   stage: LlmStage;
@@ -19,6 +19,7 @@ export interface LlmRequest {
 }
 
 const MODEL_FOR: Record<LlmStage, () => string> = {
+  chat: () => config.chatModel,
   plan: () => config.planModel,
   review: () => config.reviewModel,
   execute: () => config.executeModel,
@@ -84,11 +85,17 @@ interface ProviderConfig {
 }
 
 function resolveProvider(model: string, key: string): ProviderConfig {
-  // 1. OpenRouter (Nemotron models or OpenRouter keys)
+  const low = model.toLowerCase();
+  // 1. OpenRouter — model-slug match wins (reliable even when stage keys
+  //    still hold a stale DeepSeek/Gemini value). All '/' slugs route here.
   if (
-    key.startsWith('sk-or-v1-') ||
-    model.includes('/') ||
-    model.toLowerCase().includes('nemotron')
+    low.includes('nemotron') ||
+    low.includes('qwen') ||
+    low.startsWith('google/') ||
+    low.startsWith('nvidia/') ||
+    low.startsWith('deepseek/') ||
+    low.startsWith('moonshotai/') ||
+    model.includes('/')
   ) {
     return {
       baseURL: process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1',
@@ -98,22 +105,37 @@ function resolveProvider(model: string, key: string): ProviderConfig {
       },
     };
   }
+  // Explicit OpenRouter keys always route here.
+  if (key.startsWith('sk-or-v1-')) {
+    return {
+      baseURL: process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1',
+      defaultHeaders: {
+        'HTTP-Referer': 'https://github.com/braid',
+        'X-Title': 'Braid',
+      },
+    };
+  }
 
-  // 2. DeepSeek
-  if (
-    model.toLowerCase().startsWith('deepseek') ||
-    key === process.env.DEEPSEEK_API_KEY
-  ) {
+  // 2. DeepSeek (direct). deepseek-reasoner / deepseek-chat are billed here;
+  //    a 402 means the account is out of credit, not a routing bug.
+  if (low.startsWith('deepseek')) {
+    return {
+      baseURL: process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com',
+    };
+  }
+  if (key === process.env.DEEPSEEK_API_KEY && key) {
     return {
       baseURL: process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com',
     };
   }
 
-  // 3. Google Gemini (via OpenAI-compatible endpoint)
+  // 3. Google Gemini / Gemma (via OpenAI-compatible endpoint).
+  //    NOTE: gemini-2.5-* is sunset (404) — use gemini-3.x or gemma-4.
   if (
-    model.toLowerCase().startsWith('gemini') ||
+    low.startsWith('gemini') ||
+    low.startsWith('gemma') ||
     key.startsWith('AQ.') ||
-    key === process.env.GEMINI_API_KEY
+    (key === process.env.GEMINI_API_KEY && key)
   ) {
     return {
       baseURL:
@@ -191,7 +213,15 @@ export async function complete(req: LlmRequest): Promise<string> {
   }
 
   const res = await client.chat.completions.create(params);
-  return res.choices[0]?.message?.content ?? '';
+  const msg = res.choices[0]?.message as
+    | { content?: unknown; reasoning?: unknown; reasoning_details?: unknown }
+    | undefined;
+  if (typeof msg?.content === 'string' && msg.content.trim()) return msg.content;
+  // Reasoning models (Nemotron Ultra / Lightning) may put the answer in
+  // `reasoning` with null content when max_tokens clips thinking. Fall back
+  // so execute/plan stages don't see "Empty output".
+  if (typeof msg?.reasoning === 'string' && msg.reasoning.trim()) return msg.reasoning;
+  return (msg?.content as string) ?? '';
 }
 
 /** Strip code fences and parse JSON. Retries once with a repair nudge. */

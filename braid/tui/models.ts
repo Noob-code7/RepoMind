@@ -20,6 +20,11 @@ export interface ModelOption {
 /** Human-friendly label without inventing new models. */
 export function friendlyName(id: string): string {
   const low = id.toLowerCase();
+  if (low.includes('nemotron-3-ultra')) return 'Nemotron 3 Ultra';
+  if (low.includes('nemotron-3.5-lightning') || low.includes('nemotron-3-5-lightning')) return 'Nemotron Lightning';
+  if (low.includes('gemma-4')) return 'Gemma 4';
+  if (low.includes('gemma')) return 'Gemma';
+  if (low.includes('gemini-3')) return 'Gemini 3';
   if (low.includes('deepseek-reasoner')) return 'DeepSeek Reasoner';
   if (low.includes('deepseek')) return 'DeepSeek Chat';
   if (low.includes('gemini') && low.includes('flash')) return 'Gemini Flash';
@@ -45,10 +50,10 @@ function shortName(label: string): string {
 
 /**
  * Models actually available through configured providers.
- * Dedupes identical ids across slots; caps at 5 for the compact menu.
+ * Dedupes identical ids across slots; caps at 6 for the compact menu.
  */
 export function availableModels(): ModelOption[] {
-  const slots: LlmStage[] = ['plan', 'review', 'execute', 'triage', 'report'];
+  const slots: LlmStage[] = ['chat', 'plan', 'review', 'execute', 'triage', 'report'];
   const seen = new Set<string>();
   const out: ModelOption[] = [];
   for (const slot of slots) {
@@ -62,11 +67,12 @@ export function availableModels(): ModelOption[] {
     seen.add(id.toLowerCase());
     const label = friendlyName(id);
     out.push({ id, label, short: shortName(label), slot });
-    if (out.length >= 5) break;
+    if (out.length >= 6) break;
   }
   // Guarantee at least the env-configured ids even if effectiveModel throws.
   if (out.length === 0) {
     const fallback = [
+      config.chatModel,
       config.planModel,
       config.reviewModel,
       config.executeModel,

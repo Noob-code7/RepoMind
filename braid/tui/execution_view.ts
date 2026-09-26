@@ -93,14 +93,14 @@ export function formatDiffStatsPlain(e: ActivityEvent): string {
 
 /**
  * Minimal tab bar: Problems · Output · Debug Console · Terminal (active).
- * Thin, low-contrast, unobtrusive. Active tab is white + underlined.
+ * Reference-chat chrome: dim gray tabs, off-white active tab.
  */
 export function renderTabBar(cols: number): string {
   const tabs = ['Problems', 'Output', 'Debug Console', 'Terminal'];
   const parts = tabs.map((t) =>
     t === 'Terminal'
-      ? `${C.text}${C.bold}${t}${C.reset}`
-      : `${C.faint}${t}${C.reset}`,
+      ? `${C.body}${C.bold}${t}${C.reset}`
+      : `${C.pipelineDim}${t}${C.reset}`,
   );
   return fitLine(parts.join('   '), Math.max(20, cols));
 }
@@ -212,31 +212,31 @@ export function checklistProgress(tasks: TaskItem[]): { done: number; total: num
 
 function stageGlyph(status: StageStatus): { glyph: string; color: string } {
   switch (status) {
-    case 'completed': return { glyph: '✓', color: C.green };
-    case 'running': return { glyph: '●', color: C.text };
+    case 'completed': return { glyph: '●', color: C.pipelineDone };
+    case 'running': return { glyph: '●', color: C.pipelineDone };
     case 'awaiting-approval': return { glyph: '◐', color: C.amber };
     case 'failed': return { glyph: '✕', color: C.red };
-    default: return { glyph: '○', color: C.faint };
+    default: return { glyph: '○', color: C.pipelineDim };
   }
 }
 
 /**
- * Pipeline stage indicator restyled to the pitch-black theme:
- * plain text labels, filled/empty circles, white current, gray pending,
- * subtle green check for completed. No glow or gradients.
+ * Pipeline stage indicator in the reference-chat style on pure black:
+ * gray labels, green filled dot for done/running, hollow dim pending,
+ * amber awaiting, red failed.
  * PRD is presentational-only and hidden here (Plan → … → Report).
  */
 export function renderExecutionPipeline(p: PipelineMap, cols: number): string {
   const stages = PIPELINE_STAGES.filter((s) => s !== 'prd');
-  const sep = `${C.faint} → ${C.reset}`;
+  const sep = `${C.pipelineDim} → ${C.reset}`;
   const parts = stages.map((s) => {
     const { glyph, color } = stageGlyph(p[s]);
     const active = p[s] === 'running' || p[s] === 'awaiting-approval';
     const name = active
-      ? `${C.text}${C.bold}${STAGE_LABELS[s]}${C.reset}`
+      ? `${C.body}${C.bold}${STAGE_LABELS[s]}${C.reset}`
       : p[s] === 'completed'
-        ? `${C.muted}${STAGE_LABELS[s]}${C.reset}`
-        : `${C.faint}${STAGE_LABELS[s]}${C.reset}`;
+        ? `${C.pipelineGray}${STAGE_LABELS[s]}${C.reset}`
+        : `${C.pipelineDim}${STAGE_LABELS[s]}${C.reset}`;
     return `${name} ${color}${glyph}${C.reset}`;
   });
   return fitLine(parts.join(sep), Math.max(20, cols));

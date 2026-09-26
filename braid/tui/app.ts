@@ -21,8 +21,8 @@ import { emitKeypressEvents } from 'node:readline';
 import { EventEmitter } from 'node:events';
 import { config } from '../shared/config.js';
 import {
+  complete,
   effectiveModel,
-  setMockHandler,
   setModelOverride,
   clearModelOverride,
   type LlmStage,
@@ -39,7 +39,6 @@ import { runTests } from '../agents/debugger/test_runner.js';
 import { generateReport } from '../agents/reporter/reporter.js';
 import { decideGateReview, formatPlanSummary } from '../human_gate/gate_review.js';
 import { decideGateReport, formatReportSummary } from '../human_gate/gate_report.js';
-import { installMock, setMockManifest } from '../cli.js';
 import { MODES, cycleMode, MODE_DESCRIPTIONS, MODE_HINTS, isValidMode, type Mode } from './modes.js';
 import { filterCommands, findCommand, helpText, type SlashCommand } from './slash_commands.js';
 import { renderMarkdown } from './markdown.js';
@@ -89,7 +88,6 @@ export interface ChatMessage {
 export interface TuiOptions {
   project?: string;
   prdPath?: string;
-  mock?: boolean;
   smokeOnly?: boolean;
   /** Escape hatch: render inline on the main screen instead of the alt screen. */
   noAltScreen?: boolean;
@@ -117,7 +115,7 @@ class Cancelled extends Error {}
 /** Status-bar model for a mode (each mode shows its pipeline stage's model). */
 function statusModelFor(mode: Mode): LlmStage {
   switch (mode) {
-    case 'chat': return 'plan';
+    case 'chat': return 'chat';
     case 'plan': return 'plan';
     case 'review': return 'review';
     case 'build': return 'execute';
@@ -140,8 +138,6 @@ export class TuiApp {
   private prdPath = '';
   private prdBuffer = '';
   private feedback?: string;
-  private mock = false;
-  private mockInstalledProject = '';
   private smokeOnly = false;
   private pipeline: PipelineMap = initialPipeline();
   private messages: ChatMessage[] = [];
@@ -230,7 +226,6 @@ export class TuiApp {
     this.prdPath = opts.prdPath ? resolve(opts.prdPath) : saved.prdPath;
     this.prdBuffer = saved.prdBuffer ?? '';
     this.feedback = saved.feedback;
-    this.mock = opts.mock ?? saved.mock ?? false;
     this.smokeOnly = opts.smokeOnly ?? saved.smokeOnly ?? false;
     this.chatModel = saved.chatModel ?? '';
     this.useAltScreen = !opts.noAltScreen;
@@ -246,7 +241,6 @@ export class TuiApp {
         this.prdPath = resolve(opts.prdPath);
       } catch { /* ignore */ }
     }
-    this.ensureMock();
   }
 
   // -- session ------------------------------------------------------------
@@ -257,7 +251,9 @@ export class TuiApp {
       prdPath: this.prdPath,
       prdBuffer: this.prdBuffer,
       feedback: this.feedback,
-      mock: this.mock,
+      // mock mode retired — persist the inert default to keep the
+      // session file shape stable for older readers.
+      mock: false,
       smokeOnly: this.smokeOnly,
       mode: this.mode,
       chatModel: this.chatModel || undefined,
@@ -265,29 +261,18 @@ export class TuiApp {
     });
   }
 
-  /** Active chat model id — falls back to the plan-stage model. */
+  /** Active chat model id — falls back to the chat-stage model. */
   private activeChatModel(): string {
     if (this.chatModel) return this.chatModel;
     try {
-      return effectiveModel('plan');
+      return effectiveModel('chat');
     } catch {
-      return config.planModel;
+      return config.chatModel;
     }
   }
 
   private outDir(): string {
     return join(resolve(config.generatedRoot), this.project);
-  }
-
-  private ensureMock(): void {
-    if (this.mock && this.mockInstalledProject !== this.project) {
-      installMock(this.project);
-      this.mockInstalledProject = this.project;
-    }
-    if (!this.mock) {
-      try { setMockHandler(null); } catch { /* live models */ }
-      this.mockInstalledProject = '';
-    }
   }
 
   private setStage(stage: PipelineStage, status: PipelineMap[PipelineStage]): void {
@@ -317,10 +302,18 @@ export class TuiApp {
     this.render();
   }
 
+  private avatarUser(): string {
+    return `${C.avatarUserBg}${C.avatarFg} U ${C.reset}`;
+  }
+
+  private avatarAssistant(): string {
+    return `${C.avatarAssistantBg}${C.avatarFg} ✦ ${C.reset}`;
+  }
+
   private rolePrefix(role: MsgRole): string {
     switch (role) {
-      case 'user': return `${C.textBold}you${C.reset}`;
-      case 'assistant': return `${C.accentBold}braid${C.reset}`;
+      case 'user': return `${this.avatarUser()}  ${C.userBlueBold}You${C.reset}`;
+      case 'assistant': return `${this.avatarAssistant()}  ${C.assistantGreenBold}Assistant${C.reset}`;
       case 'system': return `${C.muted}·${C.reset}`;
       case 'tool': return `${C.muted}tool${C.reset}`;
       case 'progress': return `${C.muted}…${C.reset}`;
@@ -340,6 +333,25 @@ export class TuiApp {
     const suffix = extra > 0 ? ` ${C.faint}(+${extra} lines · Ctrl+O)${C.reset}` : '';
     const line = fitLine(first.replace(/[*_`#]/g, ''), Math.max(10, width - displayWidth(suffix) - 4));
     return [fitLine(`${margin}${C.muted}▸ ${line}${C.reset}${suffix}`, width + margin.length)];
+  }
+
+  /**
+   * Tight padded assistant bubble (reference screenshot): slate background
+   * sized to the longest content line + padding, not full-width.
+   * Returns margin-prefixed, width-fitted lines. Pure render.
+   */
+  private renderAssistantBubble(text: string, contentWidth: number, margin: string): string[] {
+    const width = Math.max(20, contentWidth);
+    const rendered = renderMarkdown(text, Math.max(10, width - 4)).split('\n');
+    // Trim trailing blanks; keep at least one line.
+    while (rendered.length > 1 && (rendered[rendered.length - 1] ?? '').trim() === '') rendered.pop();
+    let longest = 0;
+    for (const l of rendered) longest = Math.max(longest, displayWidth(l));
+    const bubbleW = Math.max(12, Math.min(width - 2, longest + 4));
+    return rendered.map((l) => {
+      const padded = padTo(` ${l} `, bubbleW);
+      return fitLine(`${margin}  ${C.bubbleBg}${C.body}${padded}${C.reset}`, width + margin.length + 2);
+    });
   }
 
   /** Home empty-state is active only with zero messages (never repeats pipeline). */
@@ -460,14 +472,23 @@ export class TuiApp {
     const L = computeLayout(cols, rows);
     const M = ' '.repeat(L.margin);
     const menu = this.slashMenu();
-    const menuHeight = menu ? Math.min(menu.length, 8) + 1 : 0;
-    const approvalHeight = this.approval ? 7 : 0;
+    // Every counted height must equal the lines its section actually emits —
+    // any phantom row shifts convHeight and strands the cursor off the input.
+    const menuHeight = menu && menu.length > 0 ? Math.min(menu.length, 8) + 1 : 0;
+    const approvalSummaryLines = this.approval
+      ? Math.min(3, this.approval.summary.split('\n').length)
+      : 0;
+    const approvalHeight = this.approval ? 3 + approvalSummaryLines : 0;
     const modeMenuHeight = this.modeMenuOpen ? MODES.length + 2 : 0;
     const modelMenuHeight = this.modelMenuOpen ? Math.min(availableModels().length, 5) + 2 : 0;
     const showPipelineLine = !isPipelineIdle(this.pipeline) || this.showingHome();
-    const pipelineHeight = showPipelineLine ? 1 : 0;
+    // The pipeline row is skipped on the home empty-state (home renders its
+    // own), so never count it there — counted-but-not-emitted rows misplace
+    // the cursor (it lands on the status line).
+    const pipelineHeight = showPipelineLine && !this.showingHome() ? 1 : 0;
     const detailLine = activeStageDetail(this.pipeline, this.busyLabel || undefined);
-    const detailHeight = detailLine ? 1 : 0;
+    // A busy frame with no stage detail still emits one status line.
+    const detailHeight = detailLine || this.busy ? 1 : 0;
     // Mid-execution terminal panel (mockup): thinking + feed + total + tasks.
     // Computed early so its height participates in convHeight (row-exact).
     const execPanel = this.buildExecPanel(L.contentWidth);
@@ -545,6 +566,20 @@ export class TuiApp {
         if (m.role === 'tool') {
           conv.push(fit(`${this.rolePrefix(m.role)}`));
           for (const l of this.renderToolMessage(m.text, L.contentWidth, M)) conv.push(l);
+          conv.push('');
+          continue;
+        }
+        if (m.role === 'user') {
+          const rendered = renderMarkdown(m.text, L.contentWidth).split('\n');
+          const tag = m.mode ? ` ${C.pipelineDim}[${m.mode}]${C.reset}` : '';
+          conv.push(fit(`${this.rolePrefix(m.role)}${tag}`));
+          for (const l of rendered) conv.push(fit(`  ${C.body}${l}${C.reset}`));
+          conv.push('');
+          continue;
+        }
+        if (m.role === 'assistant') {
+          conv.push(fit(`${this.rolePrefix(m.role)}`));
+          for (const l of this.renderAssistantBubble(m.text, L.contentWidth, M)) conv.push(l);
           conv.push('');
           continue;
         }
@@ -691,37 +726,37 @@ export class TuiApp {
       });
     }
 
-    // Bordered multiline input (OpenCode-style), left edge aligned with the
-    // conversation boundary. Internal padding keeps text off the borders;
-    // the mode pill lives in the top frame.
+    // Bordered multiline input (reference-chat style), left edge aligned
+    // with the conversation boundary. Slate border, magenta mode pill in
+    // the top frame, gray placeholder. Pure black bg is preserved.
     const pad = M;
     const boxWidth = L.boxWidth;
     const innerWidth = L.innerWidth;
-    const topLabel = ` ${C.accent}${this.mode}${C.reset} `;
+    const topLabel = ` ${C.modeMagentaBold}${this.mode}${C.reset} `;
     const topFill = Math.max(0, boxWidth - 2 - displayWidth(topLabel));
-    s += `${pad}${C.faint}${BOX.tl}${C.reset}${topLabel}${C.faint}${BOX.h.repeat(topFill)}${BOX.tr}${C.reset}\n`;
+    s += `${pad}${C.inputBorder}${BOX.tl}${C.reset}${topLabel}${C.inputBorder}${BOX.h.repeat(topFill)}${BOX.tr}${C.reset}\n`;
     const isEmpty = this.buffer.length === 0;
     visual.forEach((vline, vi) => {
       const content = isEmpty && vi === 0
-        ? `${C.faint}${fitLine(INPUT_PLACEHOLDER, innerWidth)}${C.reset}`
+        ? `${C.placeholder}${fitLine(INPUT_PLACEHOLDER, innerWidth)}${C.reset}`
         : vline;
-      s += `${pad}${C.faint}${BOX.v}${C.reset} ${padTo(content, innerWidth)} ${C.faint}${BOX.v}${C.reset}\n`;
+      s += `${pad}${C.inputBorder}${BOX.v}${C.reset} ${padTo(content, innerWidth)} ${C.inputBorder}${BOX.v}${C.reset}\n`;
     });
     const botFill = boxWidth - 2;
-    s += `${pad}${C.faint}${BOX.bl}${BOX.h.repeat(botFill)}${BOX.br}${C.reset}\n`;
+    s += `${pad}${C.inputBorder}${BOX.bl}${BOX.h.repeat(botFill)}${BOX.br}${C.reset}\n`;
     // 7. Muted/disabled note while Execute owns the terminal.
     if (execNoteHeight) {
       s += chrome(`${C.faint}Pipeline running — input available after Execute.${C.reset}`) + '\n';
     }
 
-    // Minimal status strip aligned with the input box: model · project · mode.
+    // Reference-chat footer: blue-gray status line + dimmer hint line.
     const modelLabel = shortForModel(chatModel);
     const status = statusStrip({ cols: L.contentWidth, model: modelLabel, project: this.project, mode: this.mode });
-    const modelHint = cols >= 90 ? ` ${C.faint}(Ctrl+P)${C.reset}` : '';
+    const modelHint = cols >= 90 ? ` ${C.pipelineDim}(Ctrl+P)${C.reset}` : '';
     const scrolled = this.scrollOffset > 0 ? ` ${C.amber}[▲ ${this.scrollOffset}]${C.reset}` : '';
     s += chrome(`${status}${modelHint}${scrolled}`) + '\n';
     if (hintHeight) {
-      s += chrome(`${C.faint}Enter send · Ctrl+J newline · Tab mode · Ctrl+C ${this.busy ? 'cancel' : 'exit'}${C.reset}`) + '\n';
+      s += chrome(`${C.footerDim}Enter send · Ctrl+J newline · Tab mode · Ctrl+C ${this.busy ? 'cancel' : 'exit'}${C.reset}`) + '\n';
     }
 
     // Every reset above drops the background — re-assert it after each
@@ -734,8 +769,10 @@ export class TuiApp {
     // Place the terminal cursor exactly on the editable cell: absolute
     // frame coordinates derived from the layout (never relative moves from
     // wherever rendering happened to end). 1-based: text starts after the
-    // margin, left border and one padding space.
-    const boxTopRow = rows - (inputBoxHeight + execNoteHeight + statusHeight + hintHeight) + 1;
+    // margin, left border and one padding space. boxTopRow is the frame row
+    // of the top border: the rows below it (box + note + status + hint) fill
+    // the frame exactly, so no +1 — counted chrome always equals emitted.
+    const boxTopRow = rows - (inputBoxHeight + execNoteHeight + statusHeight + hintHeight);
     const cursorRow = boxTopRow + 1 + rowInWin;
     const cursorCol = L.margin + 3 + cursorAbs.visCol;
     process.stdout.write(`\x1b[${cursorRow};${cursorCol}H`);
@@ -874,13 +911,11 @@ export class TuiApp {
     const prdFile = join(this.outDir(), 'prd.txt');
     writeFileSync(prdFile, prd);
     this.prdPath = prdFile;
-    this.ensureMock();
     try {
       const plan = await this.withBusy('planning', () =>
         planProject({ project: this.project, prd, feedback: this.feedback }),
       );
       this.checkCancel();
-      if (this.mock) setMockManifest(plan.manifest);
       let review;
       try {
         this.setStage('review', 'running');
@@ -955,9 +990,7 @@ export class TuiApp {
 
   private async actBuild(): Promise<void> {
     try {
-      this.ensureMock();
       const store = ManifestStore.load(manifestPathFor(resolve(config.generatedRoot), this.project));
-      if (this.mock) setMockManifest(store.snapshot());
       const total = store.list().length;
       this.setStage('execute', 'running');
       this.execEvents = [];
@@ -1012,7 +1045,6 @@ export class TuiApp {
 
   private async actDebug(): Promise<void> {
     try {
-      this.ensureMock();
       const projectRoot = this.outDir();
       const store = ManifestStore.load(manifestPathFor(resolve(config.generatedRoot), this.project));
       const plan = this.readJson<PlanOutput>(join(projectRoot, 'plan.json'), 'plan');
@@ -1148,7 +1180,7 @@ export class TuiApp {
         `**prd:** ${this.prdBuffer.length} chars buffered (${this.prdPath || 'no file'})`,
         this.feedback ? `**feedback:** ${this.feedback}` : '**feedback:** —',
         `**chat model:** ${chatId} (Ctrl+P or \`/model chat <name>\`)`,
-        `**flags:** mock=${this.mock ? 'on' : 'off'} · smoke-only=${this.smokeOnly} (see \`/config\`)`,
+        `**flags:** smoke-only=${this.smokeOnly} (see \`/config\`)`,
       ].join('\n'),
     );
   }
@@ -1160,10 +1192,10 @@ export class TuiApp {
       [
         '**config** (diagnostics — main UI stays minimal)',
         `**chat:** ${this.activeChatModel()} — ${labelForModel(this.activeChatModel())}`,
-        `**stages:** ${STAGES.map((s) => `${s}=${effectiveModel(s)}`).join(' · ')}`,
-        `**flags:** mock=${this.mock ? 'on' : 'off'} · smoke-only=${this.smokeOnly}`,
+        `**stages:** chat=${this.activeChatModel()} · ${STAGES.map((s) => `${s}=${effectiveModel(s)}`).join(' · ')}`,
+        `**flags:** smoke-only=${this.smokeOnly}`,
         `**paths:** project=${this.project} · out=${this.outDir()} · prd=${this.prdPath || '—'}`,
-        `**keys:** ${STAGES.map((s) => `${s}:${config.apiKeyFor(s) ? 'set' : 'missing'}`).join(' · ')}`,
+        `**keys:** chat:${config.apiKeyFor('chat') ? 'set' : 'missing'} · ${STAGES.map((s) => `${s}:${config.apiKeyFor(s) ? 'set' : 'missing'}`).join(' · ')}`,
       ].join('\n'),
     );
   }
@@ -1233,7 +1265,49 @@ export class TuiApp {
     }
   }
 
-  // -- chat ---------------------------------------------------------------
+  // -- chat (live LLM, like any agentic CLI — no hard-coded replies) ---------
+  private buildChatSystemPrompt(): string {
+    return [
+      'You are braid, an autonomous SDLC agent inside its own interactive TUI.',
+      'Answer the user directly and concisely (markdown, short).',
+      'You can discuss requirements, explain the pipeline, write or debug code, and propose next steps.',
+      'Slash commands (/plan /build /test /debug /report /status /files) run pipeline stages — mention the right one when it fits, but never claim you ran one.',
+      `Project: ${this.project}. Pipeline: ${pipelineSummary(this.pipeline)}.`,
+      this.prdBuffer.trim()
+        ? `PRD buffer (${this.prdBuffer.length} chars):\n${this.prdBuffer.slice(0, 4000)}`
+        : 'No PRD buffered yet.',
+      this.feedback ? `Pending gate feedback: ${this.feedback}` : '',
+    ].filter(Boolean).join('\n');
+  }
+
+  private buildChatHistory(limit = 10): string {
+    const recent = this.messages.slice(-limit).map((m) => {
+      const who = m.role === 'user' ? 'User' : m.role === 'assistant' ? 'Assistant' : 'System';
+      return `${who}: ${m.text.slice(0, 1200)}`;
+    });
+    return recent.length > 0 ? recent.join('\n\n') : '(no history yet)';
+  }
+
+  private async streamReply(reply: string): Promise<void> {
+    // Simulated streaming: reveal in chunks without blocking input.
+    // The ▍ caret hugs the last visible glyph: no preceding space (a real
+    // cursor never floats a cell off the text) and trailing whitespace is
+    // trimmed so it can't drop alone onto the next wrapped line.
+    // Chunks split on code points, never inside a surrogate pair/emoji.
+    const chunks = 3;
+    const chars = [...reply];
+    const step = Math.ceil(chars.length / chunks);
+    for (let i = 0; i < chunks - 1; i++) {
+      if (this.cancelRequested) break;
+      const slice = chars.slice(0, step * (i + 1)).join('').replace(/\s+$/, '');
+      this.messages.push({ role: 'assistant', text: `${slice}▍`, mode: 'chat' });
+      this.render();
+      await new Promise((r) => setTimeout(r, 60));
+      this.messages.pop();
+    }
+    this.push('assistant', reply, 'chat');
+  }
+
   private async actChat(text: string): Promise<void> {
     const trimmed = text.trim();
     // Direct file path? Load it as the PRD (the spec's core input gesture).
@@ -1245,46 +1319,47 @@ export class TuiApp {
           this.prdBuffer = readFileSync(resolve(maybePath), 'utf8').trim();
           this.prdPath = resolve(maybePath);
           this.persist();
-          this.push('assistant', `Loaded PRD from \`${maybePath}\` (${this.prdBuffer.length} chars). Run \`/plan\` or press Enter in **plan** mode to generate the task graph + manifest.`, 'chat');
+          this.push('assistant', `Loaded PRD from \`${maybePath}\` (${this.prdBuffer.length} chars). Ask me anything about it, or run \`/plan\` to generate the task graph + manifest.`, 'chat');
           return;
         }
       } catch { /* fall through to normal chat */ }
     }
     if (!trimmed) {
-      this.push('assistant', `**${this.mode}** mode — ${MODE_HINTS[this.mode]}\n\n${this.prdBuffer ? `PRD buffer: ${this.prdBuffer.length} chars.` : 'No PRD buffered yet. Paste requirements or `/prd <file>`.'}`, 'chat');
+      this.push('assistant', `**${this.mode}** mode — ${MODE_HINTS[this.mode]}\n\n${this.prdBuffer ? `PRD buffer: ${this.prdBuffer.length} chars.` : 'No PRD buffered yet. Paste requirements or `/prd <file>`, or just ask a question.'}`, 'chat');
       return;
     }
-    // Chat accumulates PRD context while answering locally (no hidden LLM spend).
+    // Long inputs in chat mode also accumulate PRD context (folded into /plan).
+    let accumulated = false;
     if (this.mode === 'chat' && trimmed.length > 40 && !trimmed.startsWith('/')) {
       this.prdBuffer += (this.prdBuffer ? '\n' : '') + trimmed;
       this.persist();
+      accumulated = true;
     }
-    const reply = [
-      `Noted (${trimmed.length} chars).`,
+    const userPrompt = [
+      `Conversation so far:\n${this.buildChatHistory()}`,
       '',
-      this.prdBuffer
-        ? `PRD buffer is now **${this.prdBuffer.length}** chars.`
-        : 'No PRD buffered yet.',
-      '',
-      '- `/plan` generates the task graph + manifest (Gate 1 approval follows).',
-      '- `/status` shows pipeline state · `/files` inspects the manifest.',
-      this.mock ? '- mock models are **on** — runs work fully offline.' : '- Tip: `/mock` toggles offline demo models (no API keys).',
+      `User: ${trimmed}`,
     ].join('\n');
-    // Simulated streaming: reveal in chunks without blocking input.
-    const chunks = 3;
-    const step = Math.ceil(reply.length / chunks);
-    let shown = '';
-    for (let i = 0; i < chunks; i++) {
-      if (this.cancelRequested) break;
-      shown = reply.slice(0, step * (i + 1));
-      if (i < chunks - 1) {
-        this.messages.push({ role: 'assistant', text: `${shown} ▍`, mode: 'chat' });
-        this.render();
-        await new Promise((r) => setTimeout(r, 60));
-        this.messages.pop();
+    try {
+      const reply = await this.withBusy('chatting', () =>
+        complete({
+          stage: 'chat',
+          systemPrompt: this.buildChatSystemPrompt(),
+          userPrompt,
+          maxTokens: 1500,
+          temperature: 0.4,
+        }),
+      );
+      this.checkCancel();
+      const suffix = accumulated ? `\n\n_PRD buffer is now **${this.prdBuffer.length}** chars (folded into the next \`/plan\`)._` : '';
+      await this.streamReply(`${reply.trim()}${suffix}`);
+    } catch (err) {
+      if (err instanceof Cancelled) {
+        this.push('system', 'Chat cancelled.');
+      } else {
+        this.push('error', `Chat failed: ${(err as Error).message}`);
       }
     }
-    this.push('assistant', reply, 'chat');
   }
 
   // -- command dispatch (shared by TUI, script and fallback paths) ---------
@@ -1345,10 +1420,7 @@ export class TuiApp {
       }
       case 'model': await this.cmdModel(arg); return true;
       case 'mock':
-        this.mock = !this.mock;
-        this.ensureMock();
-        this.persist();
-        this.push('system', `mock ${this.mock ? '**ON** (offline demo)' : '**OFF** (live models via llm_client)'}`);
+        this.push('system', '`/mock` is retired — live models via llm_client (see `/config`).');
         return true;
       case 'smoke':
         this.smokeOnly = !this.smokeOnly;
@@ -1368,7 +1440,6 @@ export class TuiApp {
       case 'project': {
         if (!arg) { this.push('error', 'Usage: `/project <name>`'); return true; }
         this.project = arg.split(/\s+/)[0]!;
-        this.ensureMock();
         this.pipeline = initialPipeline();
         this.persist();
         this.push('system', `project → **${this.project}** (pipeline reset to idle)`);
@@ -1910,7 +1981,20 @@ export class TuiApp {
   }
 
   private async actChatHeadless(text: string): Promise<void> {
-    this.messages.push({ role: 'assistant', text: `Noted (${text.trim().length} chars).`, mode: 'chat' });
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    try {
+      const reply = await complete({
+        stage: 'chat',
+        systemPrompt: this.buildChatSystemPrompt(),
+        userPrompt: `Conversation so far:\n${this.buildChatHistory()}\n\nUser: ${trimmed}`,
+        maxTokens: 1500,
+        temperature: 0.4,
+      });
+      this.messages.push({ role: 'assistant', text: reply.trim(), mode: 'chat' });
+    } catch (err) {
+      this.messages.push({ role: 'error', text: `Chat failed: ${(err as Error).message}` });
+    }
   }
 
   private async handleLineAuto(raw: string): Promise<boolean> {

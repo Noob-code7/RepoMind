@@ -14,6 +14,7 @@ function strEnv(name: string, fallback = ''): string {
 }
 
 export interface BraidConfig {
+  chatModel: string;
   planModel: string;
   reviewModel: string;
   executeModel: string;
@@ -26,11 +27,12 @@ export interface BraidConfig {
 }
 
 const STAGE_KEYS: Record<string, string[]> = {
-  plan: ['PLAN_API_KEY', 'DEEPSEEK_API_KEY', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY'],
-  review: ['REVIEW_API_KEY', 'GEMINI_API_KEY', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY'],
+  chat: ['CHAT_API_KEY', 'OPENROUTER_API_KEY', 'GEMINI_API_KEY', 'DEEPSEEK_API_KEY', 'OPENAI_API_KEY'],
+  plan: ['PLAN_API_KEY', 'OPENROUTER_API_KEY', 'GEMINI_API_KEY', 'DEEPSEEK_API_KEY', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY'],
+  review: ['REVIEW_API_KEY', 'OPENROUTER_API_KEY', 'GEMINI_API_KEY', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY'],
   execute: ['EXECUTE_API_KEY', 'OPENROUTER_API_KEY', 'OPENAI_API_KEY'],
-  triage: ['TRIAGE_API_KEY', 'DEEPSEEK_API_KEY', 'GEMINI_API_KEY', 'OPENAI_API_KEY'],
-  report: ['REPORT_API_KEY', 'GEMINI_API_KEY', 'DEEPSEEK_API_KEY', 'OPENAI_API_KEY'],
+  triage: ['TRIAGE_API_KEY', 'OPENROUTER_API_KEY', 'DEEPSEEK_API_KEY', 'GEMINI_API_KEY', 'OPENAI_API_KEY'],
+  report: ['REPORT_API_KEY', 'OPENROUTER_API_KEY', 'GEMINI_API_KEY', 'DEEPSEEK_API_KEY', 'OPENAI_API_KEY'],
 };
 
 export function apiKeyFor(stage: string): string {
@@ -43,11 +45,12 @@ export function apiKeyFor(stage: string): string {
 }
 
 export const config: BraidConfig = {
-  planModel: strEnv('PLAN_MODEL', 'deepseek-reasoner'),
-  reviewModel: strEnv('REVIEW_MODEL', 'gemini-2.5-flash'),
-  executeModel: strEnv('EXECUTE_MODEL', 'nvidia/llama-3.1-nemotron-70b-instruct'),
-  triageModel: strEnv('TRIAGE_MODEL', 'deepseek-chat'),
-  reportModel: strEnv('REPORT_MODEL', 'gemini-2.5-flash'),
+  chatModel: strEnv('CHAT_MODEL', 'google/gemma-4-26b-a4b-it'),
+  planModel: strEnv('PLAN_MODEL', 'google/gemma-4-26b-a4b-it'),
+  reviewModel: strEnv('REVIEW_MODEL', 'nvidia/nemotron-3-ultra-550b-a55b'),
+  executeModel: strEnv('EXECUTE_MODEL', 'nvidia/nemotron-3-ultra-550b-a55b'),
+  triageModel: strEnv('TRIAGE_MODEL', 'nvidia/nemotron-3.5-lightning'),
+  reportModel: strEnv('REPORT_MODEL', 'google/gemma-4-26b-a4b-it'),
   maxSelfLoopIterations: intEnv('MAX_SELF_LOOP_ITERATIONS', 3),
   generatedRoot: strEnv('GENERATED_ROOT', './generated_projects'),
   apiKeyFor,

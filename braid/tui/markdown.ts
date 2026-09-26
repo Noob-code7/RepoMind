@@ -13,11 +13,12 @@ const ANSI = {
   bold: '\x1b[1m',
   dim: '\x1b[2m',
   italic: '\x1b[3m',
-  // Restrained OpenCode-inspired tones: muted purple for code,
-  // soft white for headings, gray for structure. No bright backgrounds.
-  code: '\x1b[38;5;140m',
-  heading: '\x1b[1m\x1b[38;5;252m',
-  quote: '\x1b[38;5;243m',
+  // Reference-chat tones on pure black: cool gray-blue code,
+  // off-white headings, gray structure. Magenta never used here.
+  code: '\x1b[38;2;125;133;144m',
+  body: '\x1b[38;2;229;231;235m',
+  heading: '\x1b[1m\x1b[38;2;229;231;235m',
+  quote: '\x1b[38;2;154;160;174m',
 };
 
 function inline(text: string): string {
