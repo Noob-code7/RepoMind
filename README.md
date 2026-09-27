@@ -3,7 +3,7 @@
 
 > Takes a single PRD through Plan → Review → human gate → Execute (chunked
 > two-pass generation) → Debug (real test runner) → Report → human gate →
-> Done, looping back to Plan when the human is unsatisfied.
+> Done, looping back to Plan when the human is unsatisfied. 
 
 Braid treats code generation as an engineering-managed pipeline with a
 **deterministic orchestrator** at its center, not as one unsupervised LLM
